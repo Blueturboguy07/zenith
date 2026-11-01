@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCourseStack } from "./courseStack";
 import * as api from "./api";
+import logo from "../docs/icon.png";
 
 const P: Record<string, string> = {
   file: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6",
@@ -155,7 +157,7 @@ const pluginOn = (a: api.Assign, what: "file" | "onlinetext") => {
   return c?.value === "1";
 };
 
-function AssignRow({ a, site, token, uid, onLink, getFile }: { a: api.Assign; site: string; token: string; uid: number; onLink: (href: string) => void; getFile: (f: api.FileItem) => void }) {
+function AssignRow({ a, site, token, uid, onLink, getFile, onSubmitted }: { a: api.Assign; site: string; token: string; uid: number; onLink: (href: string) => void; getFile: (f: api.FileItem) => void; onSubmitted?: () => void }) {
   const [expanded, setExpanded] = useState(false); const [st, setSt] = useState<api.AssignStatus | null>(null); const [err, setErr] = useState("");
   const [text, setText] = useState(""); const [loadedText, setLoadedText] = useState(""); const [picked, setPicked] = useState<string[]>([]); const [saving, setSaving] = useState(false); const [msg, setMsg] = useState(""); const [agreed, setAgreed] = useState(false);
   // Moodle returns the answer as formatted HTML; edit it as plain text and only send it back when changed,
@@ -194,6 +196,7 @@ function AssignRow({ a, site, token, uid, onLink, getFile }: { a: api.Assign; si
       if (graded && !done) await api.submitForGrading(a.id);
       await load(); setPicked([]);
       setMsg(submitting ? "Submitted for grading." : "Saved.");
+      if (submitting) onSubmitted?.();
     } catch (e) { setMsg(String(e).replace(/^Error: /, "")); }
     setSaving(false);
   };
@@ -234,7 +237,7 @@ function AssignRow({ a, site, token, uid, onLink, getFile }: { a: api.Assign; si
 
 type Dl = { id: string; name: string; done: number; total: number | null };
 
-function CourseView({ c, site, token, uid, ensureDir, notify, onLink, onHtml, onForum, dlMode, setDl }: { c: api.Course; site: string; token: string; uid: number; ensureDir: () => Promise<string | null>; notify: (m: string) => void; onLink: (href: string) => void; onHtml: (title: string, url: string) => void; onForum: (title: string, id: number) => void; dlMode: api.DlMode; setDl: React.Dispatch<React.SetStateAction<Dl | null>> }) {
+function CourseView({ c, site, token, uid, ensureDir, notify, onLink, onHtml, onForum, dlMode, setDl, onSubmitted }: { c: api.Course; site: string; token: string; uid: number; ensureDir: () => Promise<string | null>; notify: (m: string) => void; onLink: (href: string) => void; onHtml: (title: string, url: string) => void; onForum: (title: string, id: number) => void; dlMode: api.DlMode; setDl: React.Dispatch<React.SetStateAction<Dl | null>>; onSubmitted?: () => void }) {
   const [secs, setSecs] = useState<api.Section[] | null>(null); const [err, setErr] = useState(""); const [closed, setClosed] = useState<Record<number, boolean>>({});
   useEffect(() => {
     setSecs(null); setErr("");
@@ -297,7 +300,7 @@ function CourseView({ c, site, token, uid, ensureDir, notify, onLink, onHtml, on
       <div className="item locked" key={m.id}><span className="ico"><Icon n="lock" /></span>
         <span className="grow">{m.name}<small>Locked</small>{m.availabilityinfo && <small>{plain(m.availabilityinfo)}</small>}</span></div>);
     const a = m.modname === "assign" ? assigns.get(m.id) : undefined;
-    if (a) return <AssignRow key={m.id} a={a} site={site} token={token} uid={uid} onLink={onLink} getFile={getFile} />;
+    if (a) return <AssignRow key={m.id} a={a} site={site} token={token} uid={uid} onLink={onLink} getFile={getFile} onSubmitted={onSubmitted} />;
     if (m.modname === "forum" && m.instance) return (
       <button className="item" key={m.id} onClick={() => onForum(m.name, m.instance!)}>
         <span className="ico"><Icon n="chat" /></span>
@@ -501,7 +504,32 @@ const THEMES: [Theme, string, string][] = [["system", "System", "Follow your dev
 type Contrast = "system" | "on" | "off";
 const CONTRASTS: [Contrast, string, string][] = [["system", "System", "Follow your device"], ["on", "On", "Always high contrast"], ["off", "Off", "Never"]];
 
-function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify, theme, setTheme, contrast, setContrast }: { user: string; site: string; signOut: () => void; dir: string | null; pick: () => Promise<string | null>; reset: () => void; mode: api.DlMode; setMode: (m: api.DlMode) => void; notify: (m: string) => void; theme: Theme; setTheme: (t: Theme) => void; contrast: Contrast; setContrast: (c: Contrast) => void }) {
+const UPDATE_MODES: [api.UpdateMode, string, string][] = [
+  ["auto", "Download automatically", "Zenith downloads the update in the background, then asks before installing."],
+  ["ask", "Ask before updating", "Zenith checks automatically, then asks before downloading and installing."],
+  ["manual", "Manual only", "Only check when you press the button."],
+];
+
+function About() {
+  const [version, setVersion] = useState("");
+  useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
+  const open = (url: string) => api.openExternal(url).catch(() => {});
+  return (<div className="stack">
+    <section className="sec">
+      <div className="setrow abouthead"><img className="aboutlogo" src={logo} alt="" /><div className="grow"><h2>Zenith</h2><small>Version {version || "…"}</small></div></div>
+      <div className="setrow"><div className="grow"><b>Source code</b><small>github.com/zac06/zenith</small></div><button className="btn" onClick={() => open("https://github.com/zac06/zenith")}>GitHub</button></div>
+      <div className="setrow"><div className="grow"><b>Website</b><small>zac06.github.io/zenith</small></div><button className="btn" onClick={() => open("https://zac06.github.io/zenith")}>Open</button></div>
+    </section>
+    <section className="sec">
+      <div className="sechead static">Developer</div>
+      <div className="setrow"><img className="avatarimg" src="https://github.com/Zac06.png?size=96" alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /><div className="grow"><b>Zaccaria Francescato</b><small>@Zac06</small></div><button className="btn" onClick={() => open("https://github.com/Zac06")}>GitHub</button></div>
+    </section>
+    <p className="muted small2">Independent app, not affiliated with or endorsed by Moodle.</p>
+  </div>);
+}
+
+function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify, theme, setTheme, contrast, setContrast, updateMode, setUpdateMode, checkNow, checking, canUpdate }: { user: string; site: string; signOut: () => void; dir: string | null; pick: () => Promise<string | null>; reset: () => void; mode: api.DlMode; setMode: (m: api.DlMode) => void; notify: (m: string) => void; theme: Theme; setTheme: (t: Theme) => void; contrast: Contrast; setContrast: (c: Contrast) => void; updateMode: api.UpdateMode; setUpdateMode: (m: api.UpdateMode) => void; checkNow: () => void; checking: boolean; canUpdate: boolean }) {
+  const [tab, setTab] = useState<"general" | "about">("general");
   const [files, setFiles] = useState<api.DlEntry[] | null>(null); const [confirm, setConfirm] = useState<string | null>(null);
   const reload = () => api.listDownloads().then(setFiles).catch(() => setFiles([]));
   useEffect(() => { reload(); }, []);
@@ -516,6 +544,8 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
   return (
     <div className="stack">
       <div className="bar"><h1>Settings</h1></div>
+      <div className="tabs"><button className={tab === "general" ? "tab on" : "tab"} onClick={() => setTab("general")}>General</button><button className={tab === "about" ? "tab on" : "tab"} onClick={() => setTab("about")}>About</button></div>
+      {tab === "general" ? (<>
       <section className="sec only-phone">
         <div className="sechead static">Account</div>
         <div className="setrow"><div className="grow"><b>{user}</b><small>{site}</small></div><button className="btn danger" onClick={signOut}>Sign out</button></div>
@@ -537,6 +567,13 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
           <div className="choices">{MODES.map(([k, t, d]) => <button key={k} className={mode === k ? "choice on" : "choice"} onClick={() => setMode(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
       </section>
       <section className="sec">
+        <div className="sechead static">Updates</div>
+        <div className="setrow col"><b>When an update is available</b>
+          <div className="choices">{UPDATE_MODES.map(([k, t, d]) => <button key={k} className={updateMode === k ? "choice on" : "choice"} onClick={() => setUpdateMode(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
+        <div className="setrow"><div className="grow"><b>Check for updates now</b><small>{canUpdate ? "Downloads and installs from GitHub releases." : "In-app install isn't available for this package; updates open the release page."}</small></div>
+          <button className="btn" disabled={checking} onClick={checkNow}>{checking ? "Checking…" : "Check now"}</button></div>
+      </section>
+      <section className="sec">
         <div className="sechead static"><span>Saved files</span><span className="muted">{files ? `${plural(files.length)} · ${size(sum(files))}` : ""}</span></div>
         {files && !files.length && <div className="setrow muted">Nothing downloaded yet.</div>}
         {[...byCourse].map(([course, list]) => (
@@ -554,6 +591,7 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
         {!!files?.length && <div className="setrow"><div className="grow muted">Only files Zenith downloaded are listed or removed; anything else in your folder is never touched. Files saved by older versions aren't tracked.</div>
           <button className="btn danger" onClick={() => ask("all", () => del())}>{confirm === "all" ? "Click to confirm" : "Delete all downloads"}</button></div>}
       </section>
+      </>) : <About />}
     </div>);
 }
 
@@ -594,6 +632,8 @@ function Setup({ theme, setTheme, contrast, setContrast, onDone }: { theme: Them
       </div>
     </div>);
 }
+
+type Due = api.UpcomingAssign & { submitted: boolean | null };
 
 export default function App() {
   const [session, setSession] = useState<api.Session | null | undefined>(undefined);
@@ -638,12 +678,83 @@ export default function App() {
   const refresh = () => api.getSession().then(setSession);
   useEffect(() => { refresh(); }, []);
   useEffect(() => { api.setNoteHandler(notify); }, [notify]);
-  useEffect(() => { if (session && explore && info) api.enrolledCourses(info.userid).then((l) => setEnrolledIds(new Set(l.map((c) => c.id)))).catch(() => {}); }, [session, explore, info]);
-  const [update, setUpdate] = useState<api.UpdateInfo | null>(null);
+  useEffect(() => { if (session && info) api.enrolledCourses(info.userid).then((l) => setEnrolledIds(new Set(l.map((c) => c.id)))).catch(() => {}); }, [session, info]);
+  const [due, setDue] = useState<Due[]>([]);
+  const [dueTick, setDueTick] = useState(0);
   useEffect(() => {
-    const run = () => api.checkUpdate().then((u) => { if (u && localStorage.getItem("skipVersion") !== u.version) setUpdate(u); }).catch(() => {});
-    run(); const t = setInterval(run, 6 * 3600 * 1000); return () => clearInterval(t);
-  }, []);
+    if (!session || !info) { setDue([]); return; }
+    const key = "upcoming:" + info.userid, cached = cacheGet<Due[]>(key);
+    if (api.isOffline() && cached) { setDue(cached); return; }
+    if (!enrolledIds.size) { setDue(cached ?? []); return; }
+    let live = true;
+    api.assignmentsForCourses([...enrolledIds])
+      .then(async (list) => {
+        const next = list.filter((a) => a.duedate * 1000 > Date.now()).sort((a, b) => a.duedate - b.duedate).slice(0, 5);
+        const withStatus = await Promise.all(next.map(async (a) => {
+          try { return { ...a, submitted: (await api.assignStatus(a.id)).submission === "submitted" }; }
+          catch { return { ...a, submitted: null }; }
+        }));
+        if (!live) return;
+        setDue(withStatus); cacheSet(key, withStatus);
+      })
+      .catch(() => { if (cached) setDue(cached); });
+    return () => { live = false; };
+  }, [session, info, enrolledIds, dueTick]);
+  const [update, setUpdate] = useState<api.UpdateInfo | null>(null);
+  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "available" | "downloading" | "ready" | "installing" | "error">("idle");
+  const [updateProgress, setUpdateProgress] = useState<api.UpdateProgress | null>(null);
+  const [updatePath, setUpdatePath] = useState<string | null>(null);
+  const [updateError, setUpdateError] = useState("");
+  const updateBusy = useRef(false);
+  const [updateMode, setUpdateModeState] = useState<api.UpdateMode>(() => { const v = localStorage.getItem("updateMode"); return v === "auto" || v === "manual" ? v : "ask"; });
+  const setUpdateMode = (m: api.UpdateMode) => { localStorage.setItem("updateMode", m); setUpdateModeState(m); };
+  const [canSelfUpdate, setCanSelfUpdate] = useState(true);
+  useEffect(() => { api.canSelfUpdate().then(setCanSelfUpdate).catch(() => setCanSelfUpdate(false)); }, []);
+  const canInstall = (u: api.UpdateInfo) => canSelfUpdate && (!api.isMobile() || !!u.apkUrl);
+  async function download() {
+    setUpdatePhase("downloading"); setUpdateProgress({ done: 0, total: null }); setUpdateError(""); setUpdatePath(null);
+    try {
+      setUpdatePath(await api.downloadUpdate(setUpdateProgress));
+      setUpdatePhase("ready");
+    } catch (e) {
+      setUpdateError(String(e).replace(/^Error: /, ""));
+      setUpdatePhase("error");
+    }
+  }
+  async function checkForUpdate(manual: boolean) {
+    if (updateBusy.current || updatePhase === "downloading" || updatePhase === "installing") return;
+    updateBusy.current = true;
+    setUpdate(null); setUpdatePhase("checking"); setUpdateError("");
+    try {
+      const u = await api.checkUpdate();
+      if (!u) { setUpdatePhase("idle"); if (manual) notify("Zenith is up to date."); return; }
+      if (!manual && localStorage.getItem("skipVersion") === u.version) { setUpdatePhase("idle"); return; }
+      setUpdate(u); setUpdatePhase("available");
+      if (updateMode === "auto" && canInstall(u)) void download();
+    } catch (e) {
+      setUpdatePhase("idle");
+      if (manual) notify("Couldn't check for updates: " + String(e).replace(/^Error: /, ""));
+    } finally {
+      updateBusy.current = false;
+    }
+  }
+  async function install() {
+    if (!update) return;
+    setUpdatePhase("installing"); setUpdateError("");
+    try {
+      await api.installUpdate(updatePath);
+      if (api.isMobile()) { notify("Finish installing in the Android dialog."); setUpdatePhase("idle"); }
+    } catch (e) {
+      setUpdateError(String(e).replace(/^Error: /, ""));
+      setUpdatePhase("error");
+    }
+  }
+  useEffect(() => {
+    if (updateMode === "manual") return;
+    void checkForUpdate(false);
+    const t = setInterval(() => void checkForUpdate(false), 6 * 3600 * 1000);
+    return () => clearInterval(t);
+  }, [updateMode, canSelfUpdate]);
   const [filter, setFilter] = useState<api.Filter>("all"); const [menu, setMenu] = useState<number | null>(null); const [loading, setLoading] = useState(false);
   const load = useCallback((f: api.Filter) => {
     setLoading(true);
@@ -726,14 +837,22 @@ export default function App() {
           <div className="bar"><button className="icon" onClick={back}><Icon n="back" /></button><h1>{open_.fullname}</h1></div>
           <div className="banner" style={{ background: tone(open_.id) }}>{open_.shortname}</div>
           <CourseView key={open_.id} dlMode={dlMode} c={open_} site={session.site} token={session.token} uid={info?.userid ?? 0} ensureDir={ensureDir} notify={notify} onLink={handleLink}
-            onHtml={(title, url) => setOverlay({ kind: "html", title, url })} onForum={(title, id) => setOverlay({ kind: "forum", title, id })} setDl={setDl} />
+            onHtml={(title, url) => setOverlay({ kind: "html", title, url })} onForum={(title, id) => setOverlay({ kind: "forum", title, id })} setDl={setDl} onSubmitted={() => setDueTick((n) => n + 1)} />
         </>) : explore ? (
           <Explore site={session.site} token={session.token} enrolled={enrolledIds} notify={notify} onLink={handleLink}
             onJoined={(c) => { setExplore(false); setStack([c]); load(filter); }} />
         ) : settingsOpen ? (
-          <Settings user={info?.fullname ?? ""} site={info?.sitename ?? ""} signOut={signOut} dir={dir} pick={pick} reset={resetDir} mode={dlMode} setMode={changeMode} notify={notify} theme={theme} setTheme={setTheme} contrast={contrast} setContrast={setContrast} />
+          <Settings user={info?.fullname ?? ""} site={info?.sitename ?? ""} signOut={signOut} dir={dir} pick={pick} reset={resetDir} mode={dlMode} setMode={changeMode} notify={notify} theme={theme} setTheme={setTheme} contrast={contrast} setContrast={setContrast}
+            updateMode={updateMode} setUpdateMode={setUpdateMode} checkNow={() => void checkForUpdate(true)} checking={updatePhase === "checking"} canUpdate={canSelfUpdate} />
         ) : (<>
           <div className="bar"><h1>My courses</h1><input className="search" placeholder="Search courses…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+          {!!due.length && <section className="duecard" aria-label="Upcoming assignments">
+            <div className="duehead"><b>Due soon</b><small>{due.length} upcoming</small></div>
+            {due.map((a) => <button className={"due " + (a.submitted === true ? "submitted" : a.submitted === false ? "pending" : "unknown")} key={a.id} onClick={() => openCourseById(a.courseId)}>
+              <span className="grow"><b>{a.name}</b><small>{a.courseShort} · {when(a.duedate)}</small></span>
+              <span className="duestatus">{a.submitted === true ? "Submitted" : a.submitted === false ? "Not submitted" : "Status unavailable"}</span>
+            </button>)}
+          </section>}
           <div className="tabs">{FILTERS.map(([k, l]) => <button key={k} className={filter === k ? "tab on" : "tab"} onClick={() => setFilter(k)}>{l}</button>)}</div>
           {loading ? <p className="muted pad">Loading…</p> : (
             <div className="grid" onClick={() => setMenu(null)}>{shown.map((c) => {
@@ -760,11 +879,18 @@ export default function App() {
           {!shown.length && !loading && <p className="muted pad">No courses in this view.</p>}
         </>)}
       </main>
-      {update && (
+      {update && updatePhase !== "checking" && (
         <div className="update">
-          <div className="grow"><b>Zenith {update.version} is available</b><small>A newer version has been released.</small></div>
-          <button className="primary sm" onClick={() => api.openExternal(update.url)}>Download</button>
-          <button className="icon" title="Skip this version" onClick={() => { localStorage.setItem("skipVersion", update.version); setUpdate(null); }}><Icon n="x" /></button>
+          <div className="grow">
+            <b>{updatePhase === "ready" ? `Zenith ${update.version} is ready` : updatePhase === "downloading" ? `Downloading Zenith ${update.version}…` : updatePhase === "installing" ? "Installing update…" : updatePhase === "error" ? "Couldn't update automatically" : `Zenith ${update.version} is available`}</b>
+            <small className={updatePhase === "error" ? "msg" : ""}>{updatePhase === "error" ? updateError : updatePhase === "downloading" ? (updateProgress?.total ? `${Math.round((updateProgress.done / updateProgress.total) * 100)}%` : size(updateProgress?.done ?? 0)) : updatePhase === "ready" ? "Install it now, or later." : "A newer version has been released."}</small>
+            {updatePhase === "downloading" && <div className={updateProgress?.total ? "dlbar" : "dlbar indet"}>{updateProgress?.total ? <i style={{ width: `${Math.min(100, Math.round((updateProgress.done / updateProgress.total) * 100))}%` }} /> : <i />}</div>}
+          </div>
+          {updatePhase === "available" && (canInstall(update) ? <button className="primary sm" onClick={() => void download()}>Download</button> : <button className="primary sm" onClick={() => api.openExternal(update.url)}>Open release page</button>)}
+          {updatePhase === "ready" && <button className="primary sm" onClick={() => void install()}>Install and restart</button>}
+          {updatePhase === "error" && <button className="primary sm" onClick={() => api.openExternal(update.url)}>Open release page</button>}
+          {updatePhase === "error" && updatePath && <button className="btn" onClick={() => void install()}>Try install</button>}
+          {updatePhase !== "downloading" && updatePhase !== "installing" && <button className="icon" title={updatePhase === "error" ? "Later" : "Skip this version"} onClick={() => { if (updatePhase !== "error") localStorage.setItem("skipVersion", update.version); setUpdate(null); setUpdatePhase("idle"); }}><Icon n="x" /></button>}
         </div>)}
       {(toast || dl) && <div className="toast">{toast || dl?.name}
         {dl && <div className={dl.total ? "dlbar" : "dlbar indet"}>{dl.total ? <i style={{ width: `${Math.min(100, Math.round((dl.done / dl.total) * 100))}%` }} /> : <i />}</div>}

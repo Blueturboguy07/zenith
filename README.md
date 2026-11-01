@@ -25,7 +25,7 @@ Codebase documentation: <https://deepwiki.com/Zac06/zenith> (generated from this
 - **Downloads**: files are saved to `Downloads/Zenith` (or a folder you choose in Settings), organised by course, and opened with the system default application. On Android they stay in the app's own storage and open in the app you pick. You choose whether to re-download only when Moodle's copy is newer (default), always reuse the saved copy, or always download again.
 - **Settings**: theme (system, light, dark), high contrast, download folder and behaviour, and a list of the files Zenith saved, which you can delete per file, per course or all at once.
 - **Links**: course links open inside the app; other links open in your browser, already logged in when the site allows it.
-- **Update notice** (desktop): the app checks GitHub for a newer release and shows a banner with a download link. On Android, download the newer `.apk` from the releases page and install it over the old one.
+- **Updates:** desktop builds install signed updates in-app (AppImage, Linux `.deb`/`.rpm`, Windows, macOS); Android hands the APK to the system installer. Settings → Updates chooses automatic, ask, or manual.
 - **Android**: the same app on phones and tablets, with a bottom navigation bar on phones, the Android back button, and a launcher icon that matches the desktop app.
 - **First-run setup** for theme and contrast.
 - **Secure token storage** in the OS keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), or encrypted with a key in the Android Keystore.
@@ -88,6 +88,8 @@ npx tauri icon path/to/icon.png
 npm run tauri build
 ```
 
+A bundled build also signs the updater artifacts. Locally, export `TAURI_SIGNING_PRIVATE_KEY` (the key file's contents) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; on GitHub the release workflow reads them from repository secrets.
+
 Installers are written to `src-tauri/target/release/bundle/`:
 
 | OS      | Output                      |
@@ -119,6 +121,8 @@ git tag v0.1.0 && git push origin v0.1.0
 
 The same workflow also builds the Android APK (job `android`), signs it with the key stored in the repository secrets and attaches it to the same draft release, named `Zenith_<tag>.apk`. The secrets it needs are listed in [`MOBILE.md`](MOBILE.md).
 
+Desktop update manifests are signed too: keep `TAURI_SIGNING_PRIVATE_KEY` (the full private key) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the repository secrets, and put the matching public key in `src-tauri/tauri.conf.json`. The first updater-capable release has to be installed manually over the old one; later releases update in-app.
+
 Unsigned builds trigger warnings (Windows SmartScreen, macOS Gatekeeper). Distributing without warnings requires code signing, and notarization on macOS.
 
 ## Project structure
@@ -137,8 +141,8 @@ zenith/
 └─ src-tauri/
    ├─ src/lib.rs           commands: site discovery, SSO, password login,
    │                       web-service calls, downloads, browser launching,
-   │                       update check, keychain session
-   ├─ capabilities/        Tauri permissions (opener, deep-link, dialog)
+   │                       update check and APK install, keychain session
+   ├─ capabilities/        Tauri permissions (opener, deep-link, dialog, desktop updates)
    ├─ plugins/             small native plugins (Android: Keystore, open file;
    │                       iOS: Quick Look, not working yet)
    ├─ gen/android/         the Android Studio project
@@ -162,12 +166,13 @@ zenith/
 | `open_local` / `open_external` | Open a saved file or a web link with the system default |
 | `open_authed`            | Open a site URL in the browser, logged in via auto-login key |
 | `check_update`           | Compare the latest GitHub release with the running version  |
+| `can_self_update` / `download_update` / `install_update` | Android APK update support (desktop updates use the updater plugin) |
 | `get_session` / `logout` | Restore or clear the session in the OS keychain             |
 
 ## Known limitations
 
 - Only browser-based SSO is supported (see the Moodle requirements above).
-- Android only: no Play Store listing, no automatic updates, and ARM devices only (no x86 emulator). iOS is not supported yet.
+- Android only: no Play Store listing and ARM devices only (no x86 emulator). iOS is not supported yet.
 - Files are downloaded in one request, held in memory and then written to disk, without a progress indicator.
 - Hiding courses relies on Moodle allowing the preference update through the mobile service. Some sites may block it.
 - Assignments are read-only (submitting opens the browser). Calendar, forums, grades and messaging are not implemented yet; those activities open in the browser.

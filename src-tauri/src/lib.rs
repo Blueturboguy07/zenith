@@ -959,10 +959,13 @@ async fn open_authed(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct UpdateInfo {
     version: String,
     url: String,
     notes: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apk_url: Option<String>,
 }
 
 fn parse_ver(v: &str) -> Vec<u64> {
@@ -975,14 +978,25 @@ fn parse_ver(v: &str) -> Vec<u64> {
     n
 }
 
+fn apk_asset(v: &Value) -> Option<String> {
+    v["assets"].as_array()?.iter().find_map(|a| {
+        let name = a["name"].as_str()?;
+        name.to_ascii_lowercase()
+            .ends_with(".apk")
+            .then(|| a["browser_download_url"].as_str().map(String::from))
+            .flatten()
+    })
+}
+
 /// Checks the latest published GitHub release; returns it only if newer than the running version.
 #[tauri::command]
 async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
-    if cfg!(mobile) {
-        return Ok(None); // the app store updates the app; Google Play and the App Store do not allow pointing users elsewhere
+    if cfg!(target_os = "ios") {
+        return Ok(None); // iOS is not a supported build yet
     }
     let v: Value = reqwest::Client::builder()
         .user_agent("Zenith-update-check")
+        .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?
         .get("https://api.github.com/repos/zac06/zenith/releases/latest")
@@ -1005,9 +1019,116 @@ async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
                 .unwrap_or("https://github.com/zac06/zenith/releases/latest")
                 .to_string(),
             notes: v["body"].as_str().unwrap_or("").chars().take(400).collect(),
+            apk_url: apk_asset(&v),
         }))
     } else {
         Ok(None)
+    }
+}
+
+/// Whether this build can install its own update. Dev builds and unsupported bundles cannot.
+#[tauri::command]
+fn can_self_update() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        true
+    }
+    #[cfg(target_os = "ios")]
+    {
+        false
+    }
+    #[cfg(desktop)]
+    {
+        use tauri::utils::{config::BundleType, platform::bundle_type};
+        matches!(
+            bundle_type(),
+            Some(
+                BundleType::AppImage
+                    | BundleType::Nsis
+                    | BundleType::Msi
+                    | BundleType::App
+                    | BundleType::Deb
+                    | BundleType::Rpm
+            )
+        )
+    }
+}
+
+/// Android only: downloads the APK from the release URL into the app cache.
+#[tauri::command]
+async fn download_update(app: AppHandle, url: String) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, url);
+        Err("Automatic APK updates are Android only".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+        if parsed.scheme() != "https"
+            || parsed.host_str() != Some("github.com")
+            || !parsed.path().starts_with("/zac06/zenith/releases/download/")
+        {
+            return Err("Unexpected update address".into());
+        }
+        let dir = app
+            .path()
+            .app_cache_dir()
+            .map_err(|e| e.to_string())?
+            .join("updates");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join("zenith-update.apk");
+        let part = dir.join("zenith-update.apk.part");
+        let mut resp = reqwest::Client::builder()
+            .user_agent("Zenith-update")
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+        let total = resp.content_length();
+        let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+        use std::io::Write;
+        let mut done = 0u64;
+        let mut last = std::time::Instant::now();
+        while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+            file.write_all(&chunk).map_err(|e| e.to_string())?;
+            done += chunk.len() as u64;
+            if last.elapsed() >= std::time::Duration::from_millis(150) || Some(done) == total {
+                let _ = app.emit(
+                    "update-progress",
+                    serde_json::json!({ "done": done, "total": total }),
+                );
+                last = std::time::Instant::now();
+            }
+        }
+        file.flush().map_err(|e| e.to_string())?;
+        drop(file);
+        std::fs::rename(&part, &path).map_err(|e| e.to_string())?;
+        let _ = app.emit(
+            "update-progress",
+            serde_json::json!({ "done": done, "total": total }),
+        );
+        Ok(path.to_string_lossy().to_string())
+    }
+}
+
+/// Hands a downloaded APK to Android's package installer, which asks the user to confirm.
+#[tauri::command]
+fn install_update(app: AppHandle, path: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        app.android_native().install_apk(&path)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, path);
+        Err("Automatic install is not supported on this platform".into())
     }
 }
 
@@ -1033,6 +1154,8 @@ pub fn run() {
     #[cfg(desktop)]
     {
         app = app.plugin(tauri_plugin_single_instance::init(|_, _, _| {})); // must be first
+        app = app.plugin(tauri_plugin_updater::Builder::new().build());
+        app = app.plugin(tauri_plugin_process::init());
     }
     #[cfg(target_os = "android")]
     {
@@ -1085,6 +1208,9 @@ pub fn run() {
             open_external,
             open_authed,
             check_update,
+            can_self_update,
+            download_update,
+            install_update,
             list_downloads,
             delete_downloads,
             open_local,
@@ -1098,7 +1224,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{callback_matches, clear_pending, read_pending, require_https, same_origin, save_pending};
+    use super::{apk_asset, callback_matches, clear_pending, read_pending, require_https, same_origin, save_pending};
+    #[test]
+    fn finds_the_apk_asset() {
+        let release = serde_json::json!({
+            "assets": [
+                { "name": "Zenith_0.2.3_amd64.AppImage", "browser_download_url": "https://github.com/x/y" },
+                { "name": "Zenith_v0.2.3.apk", "browser_download_url": "https://github.com/x/z.apk" }
+            ]
+        });
+        assert_eq!(apk_asset(&release).as_deref(), Some("https://github.com/x/z.apk"));
+        assert_eq!(apk_asset(&serde_json::json!({ "assets": [] })), None);
+    }
     #[test]
     fn origin_check() {
         let site = "https://moodle.uni.edu/mycampus";

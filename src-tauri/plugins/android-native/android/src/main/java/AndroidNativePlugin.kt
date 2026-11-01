@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -56,6 +59,40 @@ class AndroidNativePlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("No app on this phone can open this file")
         } catch (e: Exception) {
             invoke.reject(e.message ?: "Could not open the file")
+        }
+    }
+
+    /** Hands a downloaded APK to Android's package installer, which asks the user to confirm. */
+    @Command
+    fun installApk(invoke: Invoke) {
+        try {
+            val file = File(invoke.parseArgs(PathArg::class.java).path)
+            if (!file.isFile || !file.name.endsWith(".apk", ignoreCase = true)) {
+                throw IllegalArgumentException("The update file is missing")
+            }
+            val info = activity.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+            if (info?.packageName != activity.packageName) {
+                throw IllegalArgumentException("This file is not a Zenith update")
+            }
+            // Android itself refuses an APK signed with a different key when the package is already installed.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
+                activity.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}"))
+                )
+                invoke.reject("Allow Zenith to install apps, then try again")
+                return
+            }
+            val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.openfile", file)
+            activity.startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+            invoke.resolve()
+        } catch (e: ActivityNotFoundException) {
+            invoke.reject("No package installer found")
+        } catch (e: Exception) {
+            invoke.reject(e.message ?: "Could not install the update")
         }
     }
 

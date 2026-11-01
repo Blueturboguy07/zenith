@@ -34,7 +34,7 @@ npm run tauri android build
 | No user-visible Downloads folder, no folder picker | Files go to the app's own storage; the "Download folder" setting is hidden |
 | Browser SSO returns through `zenith://` | The scheme is registered for Android and iOS in `tauri.conf.json` |
 | The system can close the app while the browser login is open | The login attempt is saved on disk and read back when the link returns. A link that starts the app from scratch is not delivered as an event, so the app asks for it at startup (`get_current`). The handler runs off the UI thread, which would otherwise freeze Android |
-| Self-update prompts break store rules | The GitHub update check does nothing on mobile |
+| Updates ship as APKs, not through a store | The GitHub update check runs on Android and hands the APK to the system package installer |
 | Sidebar, `100vh`, notches | Bottom bar under 600 px, `100dvh`, `viewport-fit=cover` and safe-area insets |
 | No hover or right-click on touch | Course menu button always visible, 44 px touch targets |
 | Android back button closed the app | Each open course is a history entry, so back goes up one level (`src/courseStack.ts`) |
@@ -66,7 +66,7 @@ For GitHub (`.github/workflows/release.yml`, on every `v*` tag), add three repos
 
 - **Android 7.0 or newer** (API 24). The release APK contains 64-bit and 32-bit ARM code, which is every current phone and tablet. It does not run on x86 emulator images; use an ARM image or a real device.
 - **Installing.** The release is an `.apk`, not a Play Store listing. The first time, Android asks you to allow installs from the browser or file manager you used. Allow it for that one install.
-- **Updating.** The app never updates itself and never prompts about new versions on a phone. To update, download the newer `.apk` from the releases page and install it over the old one. This only works because every APK is signed with the same key (see below); an APK signed with a different key has to be installed after uninstalling the old app, which also deletes its saved login and files.
+- **Updating.** Zenith checks the latest published GitHub release and offers the newer `.apk` in the same update card as the desktop app. Android opens its package installer for the final confirmation; the first time, allow Zenith to install apps. The APK must be signed with the same key as the installed app (see below); a different key has to be installed after uninstalling the old app, which also deletes its saved login and files.
 - **Your login** is encrypted with a key that never leaves the Android Keystore. If the phone is restored from a backup or its lock screen is reset, that key is gone and you simply sign in again.
 - **Files stay inside the app.** They are removed on uninstall and are not shown in the Files app. Opening one hands a copy to another app, and the copy stays in the app's cache until Android clears it.
 - **Browser sign-in.** Android may close Zenith while the browser login is open. The login attempt is kept on disk, so the sign-in still completes when the link brings the app back.

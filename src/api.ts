@@ -1,10 +1,15 @@
 import { invoke as real } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { fake } from "./demo";
 
 // `zenith --screenshot`: every call is answered with invented data (see demo.ts)
 let demo = false;
+let mobile = false;
+export const isMobile = () => mobile;
 export const init = () => Promise.all([real<boolean>("screenshot_mode"), real<boolean>("is_mobile")])
-  .then(([d, m]) => { demo = d; if (m) document.documentElement.dataset.mobile = ""; }).catch(() => {});
+  .then(([d, m]) => { demo = d; mobile = m; if (m) document.documentElement.dataset.mobile = ""; }).catch(() => {});
 // The Android WebView keeps navigator.onLine true with no internet, so also remember when a call fails like a dead network.
 export const net = { down: false };
 export const isOffline = () => net.down || !navigator.onLine;
@@ -63,8 +68,55 @@ let onNote: (m: string) => void = () => {};
 export const setNoteHandler = (f: (m: string) => void) => { onNote = f; };
 // opens in the system browser (auto-logged-in when possible); reports why auto-login was skipped
 export const openWeb = (url: string) => invoke<string | null>("open_authed", { url }).then((m) => { if (m) onNote(m); });
-export type UpdateInfo = { version: string; url: string; notes: string };
-export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
+export type UpdateMode = "auto" | "ask" | "manual";
+export type UpdateInfo = { version: string; url: string; notes: string; apkUrl?: string };
+export type UpdateProgress = { done: number; total: number | null };
+let pendingUpdate: Update | null = null;
+let pendingApk: string | null = null;
+export const canSelfUpdate = async () => (demo ? true : invoke<boolean>("can_self_update"));
+export const checkUpdate = async (): Promise<UpdateInfo | null> => {
+  if (demo) return null;
+  if (mobile) {
+    const u = await invoke<UpdateInfo | null>("check_update");
+    pendingApk = u?.apkUrl ?? null;
+    return u;
+  }
+  const u = await check();
+  pendingUpdate = u;
+  return u ? {
+    version: u.version,
+    url: `https://github.com/zac06/zenith/releases/tag/v${u.version}`,
+    notes: u.body ?? "",
+  } : null;
+};
+export const downloadUpdate = async (onProgress: (p: UpdateProgress) => void): Promise<string | null> => {
+  if (demo) return null;
+  if (mobile) {
+    if (!pendingApk) throw new Error("No APK in the latest release");
+    const off = await listen<UpdateProgress>("update-progress", (e) => onProgress(e.payload));
+    try { return await invoke<string>("download_update", { url: pendingApk }); }
+    finally { off(); }
+  }
+  if (!pendingUpdate) throw new Error("Check for updates first");
+  let done = 0, total: number | null = null;
+  await pendingUpdate.download((e) => {
+    if (e.event === "Started") { done = 0; total = e.data.contentLength ?? null; }
+    else if (e.event === "Progress") done += e.data.chunkLength;
+    onProgress({ done, total });
+  });
+  onProgress({ done, total });
+  return null;
+};
+export const installUpdate = async (path: string | null): Promise<void> => {
+  if (demo) return;
+  if (mobile) {
+    await invoke<void>("install_update", { path: path ?? "" });
+    return;
+  }
+  if (!pendingUpdate) throw new Error("No update is ready");
+  await pendingUpdate.install();
+  await relaunch();
+};
 
 export type SearchCourse = { id: number; fullname: string; shortname: string; categoryid?: number; categoryname?: string; summary?: string; overviewfiles?: { fileurl: string }[]; contacts?: { id: number; fullname: string }[]; enrollmentmethods?: string[] };
 export type Category = { id: number; name: string; parent: number; path?: string; coursecount?: number };
@@ -94,6 +146,14 @@ export const openExternal = (url: string) => invoke<void>("open_external", { url
 export type Assign = { id: number; cmid: number; name: string; duedate: number; allowsubmissionsfromdate: number; cutoffdate?: number; intro?: string; introattachments?: FileItem[]; nosubmissions?: number; submissiondrafts?: number; requiresubmissionstatement?: number; configs?: { plugin?: string; subtype?: string; name: string; value: string }[] };
 export const courseAssignments = async (courseid: number) =>
   (await ws<{ courses: { assignments: Assign[] }[] }>("mod_assign_get_assignments", { "courseids[0]": String(courseid) })).courses[0]?.assignments ?? [];
+export type UpcomingAssign = Assign & { courseId: number; courseName: string; courseShort: string };
+export const assignmentsForCourses = async (ids: number[]): Promise<UpcomingAssign[]> => {
+  if (!ids.length) return [];
+  const params: Record<string, string> = {};
+  ids.forEach((id, i) => { params[`courseids[${i}]`] = String(id); });
+  const r = await ws<{ courses: { id: number; fullname: string; shortname: string; assignments: Assign[] }[] }>("mod_assign_get_assignments", params);
+  return r.courses.flatMap((c) => c.assignments.map((a) => ({ ...a, courseId: c.id, courseName: c.fullname, courseShort: c.shortname })));
+};
 export type AssignStatus = { submission: string; grade?: string; text?: string; files?: FileItem[]; canEdit?: boolean };
 export const assignStatus = async (assignid: number): Promise<AssignStatus> => {
   const r = await ws<any>("mod_assign_get_submission_status", { assignid: String(assignid) });

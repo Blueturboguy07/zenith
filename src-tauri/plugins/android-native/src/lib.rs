@@ -25,6 +25,10 @@ impl<R: Runtime> AndroidNative<R> {
     pub fn open_file(&self, path: &str) -> Result<(), String> {
         self.0.run_mobile_plugin("openFile", PathArg { path }).map_err(|e| e.to_string())
     }
+    /// Hands a downloaded APK to Android's package installer.
+    pub fn install_apk(&self, path: &str) -> Result<(), String> {
+        self.0.run_mobile_plugin("installApk", PathArg { path }).map_err(|e| e.to_string())
+    }
     /// Encrypts with a key that lives in the Android Keystore (it never leaves the secure hardware) and stores the result.
     pub fn secret_set(&self, value: &str) -> Result<(), String> {
         self.0.run_mobile_plugin("secretSet", ValueArg { value }).map_err(|e| e.to_string())

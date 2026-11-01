@@ -59,7 +59,20 @@ main{overflow:auto;padding:clamp(16px,3vw,28px) calc(clamp(16px,4vw,36px) + env(
 .html a{color:var(--accfg);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
 .html table{border-collapse:collapse;max-width:100%}.html td,.html th{border:1px solid var(--line);padding:6px 10px}
 
-.update{position:fixed;right:24px;bottom:24px;display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;box-shadow:0 6px 20px #0003;max-width:400px;font-size:14px}
+.update{position:fixed;right:24px;bottom:24px;display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;box-shadow:0 6px 20px #0003;max-width:min(440px,calc(100vw - 32px));font-size:14px;flex-wrap:wrap}
+.update .grow{display:flex;flex-direction:column;gap:4px}
+.update .dlbar{width:100%}
+.update .msg{font-size:12px;line-height:1.35;margin:0}
+.duecard{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:20px}
+.duehead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);font:600 15px var(--serif)}
+.due{display:flex;align-items:center;gap:12px;width:100%;padding:11px 16px;border-top:1px solid var(--line);border-left:3px solid var(--line);font-size:14px;text-align:left}
+.due:first-of-type{border-top:0}.due:hover{background:var(--tint)}
+.due.submitted{border-left-color:var(--acc)}.due.pending{border-left-color:var(--warnline)}.due.unknown{border-left-color:var(--mut)}
+.due .grow{display:flex;flex-direction:column;gap:2px}.due .grow b{font-weight:600}
+.duestatus{font-size:12px;color:var(--mut);white-space:nowrap}.due.submitted .duestatus{color:var(--accfg)}.due.pending .duestatus{color:var(--warnfg)}
+.abouthead{padding-block:18px}.abouthead h2{font:600 24px var(--serif);margin:0}
+.aboutlogo{width:64px;height:64px;border-radius:12px;object-fit:cover;background:var(--tint)}
+.avatarimg{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--tint)}
 .primary.sm{padding:8px 14px}
 
 .joinrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.joinrow input{max-width:280px}.search.wide{max-width:420px}
@@ -144,6 +157,8 @@ button{touch-action:manipulation}
   nav button svg{width:22px;height:22px}
   .only-phone{display:block}
   .toast{bottom:calc(72px + env(safe-area-inset-bottom));max-width:calc(100vw - 32px)}
+  .update{left:16px;right:16px;bottom:calc(72px + env(safe-area-inset-bottom));max-width:none}
+  .due{padding-inline:12px}.duestatus{white-space:normal;text-align:right}
   .bar{flex-wrap:wrap;margin-bottom:16px}.bar h1{font-size:24px;min-width:0}
   .search,.search.wide{max-width:none;flex:1 1 100%}
   .joinrow input{max-width:none;flex:1 1 100%}
