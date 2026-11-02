@@ -31,6 +31,13 @@ h1{font:600 clamp(32px,5vw,54px)/1.08 var(--serif);margin:0 0 20px;overflow-wrap
 .lede{max-width:46ch;margin:0 0 28px;font-size:20px}
 .btn{display:inline-flex;align-items:center;gap:10px;min-height:50px;background:var(--acc);color:var(--accon);padding:12px 22px;border-radius:var(--r);font-weight:600;text-decoration:none}
 .btn:hover{filter:brightness(1.08)}
+.inst{margin:0 0 22px}
+.insthead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px}
+.inst .other{margin:0}
+.term{display:block;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--stripe);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.term .nb{white-space:nowrap}
+.insthead button{flex:none;padding:6px 12px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--fg);font:600 14px var(--sans);cursor:pointer}
+.insthead button:hover{border-color:var(--acc);color:var(--accfg)}
 .meta{margin:12px 0 0;color:var(--mut);font-size:16px}
 .other{margin:28px 0 10px;color:var(--mut);font-size:16px}
 .os-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;max-width:440px}
@@ -62,7 +69,7 @@ h2{font:600 30px/1.2 var(--serif);margin:0 0 24px}
 footer{padding:32px 0 48px;border-top:1px solid var(--line);color:var(--mut);font-size:15px}
 @media(max-width:860px){.hero{grid-template-columns:1fr;gap:36px;padding-top:24px}.rows>div{grid-template-columns:1fr;gap:4px;padding:16px 18px}}
 @media(max-width:700px){.cards{grid-template-columns:1fr}}
-@media(max-width:480px){.wrap{padding:0 20px}.os-row{grid-template-columns:repeat(2,minmax(0,1fr))}.btn{width:100%;justify-content:center}}
+@media(max-width:480px){.wrap{padding:0 20px}.os-row{grid-template-columns:repeat(2,minmax(0,1fr))}.btn{width:100%;justify-content:center}.term{font-size:12px}}
 </style>
 </head>
 <body>
@@ -84,6 +91,10 @@ footer{padding:32px 0 48px;border-top:1px solid var(--line);color:var(--mut);fon
   <div>
     <h1>Your Moodle courses, on your desktop and your phone.</h1>
     <p class="lede">Zenith is a free app for Moodle on Linux, Windows, macOS and Android. Open your courses, read assignments and save course files without loading the website each time.</p>
+    <div class="inst" id="inst" hidden>
+      <div class="insthead"><p class="other" id="instlabel">Install from a terminal</p><button type="button" id="copy">Copy</button></div>
+      <code class="term" id="cmd">curl -fsSL https://zac06.github.io/zenith/install.sh<span class="nb"> | sh</span></code>
+    </div>
     <a class="btn" id="get" href="https://github.com/zac06/zenith/releases/latest"><svg class="ic" id="getic" hidden aria-hidden="true"><use id="getuse" href="#i-windows"/></svg><span id="gett">Download from GitHub</span></a>
     <p class="meta" id="meta">Works on Linux, Windows, macOS and Android.</p>
     <p class="other" id="other">Other systems</p>
@@ -126,7 +137,7 @@ footer{padding:32px 0 48px;border-top:1px solid var(--line);color:var(--mut);fon
   <dl class="rows">
     <div><dt>Windows</dt><dd>The installer is not code-signed yet, so SmartScreen may warn you. Choose More info, then Run anyway.</dd></div>
     <div><dt>macOS</dt><dd>The app is not notarized yet. If macOS refuses to open it, right-click the app and choose Open, or allow it under System Settings, Privacy &amp; Security.</dd></div>
-    <div><dt>Linux</dt><dd>For the AppImage, make it executable first: <code>chmod +x Zenith*.AppImage</code>. The .deb and .rpm packages install with your package manager.</dd></div>
+    <div><dt>Linux</dt><dd>For the AppImage, make it executable first: <code>chmod +x Zenith*.AppImage</code>. The .deb and .rpm packages install with your package manager. The one-line install in the hero does the download and setup for you.</dd></div>
     <div><dt>Android</dt><dd>Needs Android 7 or newer. Open the downloaded .apk file. The first time, Android asks you to allow installs from your browser or file manager: allow it for this one install. The app does not update itself, so to update, download the new .apk from this page and install it over the old one.</dd></div>
   </dl>
 </section>
@@ -166,6 +177,21 @@ footer{padding:32px 0 48px;border-top:1px solid var(--line);color:var(--mut);fon
   var ios = os === "ios";
   var iosMsg = "Zenith is not available for iPhone or iPad yet. Use it on a computer or an Android device.";
   if (ios) document.getElementById("meta").textContent = iosMsg;
+  if (os === "linux" || os === "mac") {
+    document.getElementById("inst").hidden = false;
+    document.getElementById("instlabel").textContent = "Install on " + (os === "mac" ? "macOS" : "Linux") + " with one command";
+  }
+
+  var copyBtn = document.getElementById("copy");
+  copyBtn.addEventListener("click", function () {
+    var cmd = document.getElementById("cmd").textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(cmd) : Promise.reject()).then(function () {
+      copyBtn.textContent = "Copied";
+      setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+    }, function () {
+      getSelection().selectAllChildren(document.getElementById("cmd"));
+    });
+  });
 
   function fail() {
     kinds.forEach(function (k) {
