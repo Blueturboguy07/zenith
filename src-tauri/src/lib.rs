@@ -1125,7 +1125,7 @@ async fn download_update(app: AppHandle, url: String) -> Result<String, String> 
         let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
         if parsed.scheme() != "https"
             || parsed.host_str() != Some("github.com")
-            || !parsed.path().starts_with("/zac06/zenith/releases/download/")
+            || !parsed.path().to_ascii_lowercase().starts_with("/zac06/zenith/releases/download/")
         {
             return Err("Unexpected update address".into());
         }

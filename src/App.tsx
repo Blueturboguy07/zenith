@@ -533,6 +533,9 @@ const MODES: [api.DlMode, string, string][] = [
 type Theme = "system" | "light" | "dark";
 const THEMES: [Theme, string, string][] = [["system", "System", "Follow your device"], ["light", "Light", "Always light"], ["dark", "Dark", "Always dark"]];
 
+const ACCENTS: [string, string][] = [["", "Pine"], ["#1d4ed8", "Blue"], ["#6d28d9", "Violet"], ["#be123c", "Rose"], ["#92400e", "Amber"], ["#334155", "Slate"]];   // all pass AA text contrast on the light and (lightened) dark backgrounds
+const SETTINGS_TABS = [["general", "General"], ["appearance", "Appearance"], ["downloads", "Downloads"], ["about", "About"]] as const;
+
 type Contrast = "system" | "on" | "off";
 const CONTRASTS: [Contrast, string, string][] = [["system", "System", "Follow your device"], ["on", "On", "Always high contrast"], ["off", "Off", "Never"]];
 
@@ -560,8 +563,8 @@ function About() {
   </div>);
 }
 
-function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify, theme, setTheme, contrast, setContrast, updateMode, setUpdateMode, checkNow, checking, canUpdate }: { user: string; site: string; signOut: () => void; dir: string | null; pick: () => Promise<string | null>; reset: () => void; mode: api.DlMode; setMode: (m: api.DlMode) => void; notify: (m: string) => void; theme: Theme; setTheme: (t: Theme) => void; contrast: Contrast; setContrast: (c: Contrast) => void; updateMode: api.UpdateMode; setUpdateMode: (m: api.UpdateMode) => void; checkNow: () => void; checking: boolean; canUpdate: boolean }) {
-  const [tab, setTab] = useState<"general" | "about">("general");
+function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify, theme, setTheme, contrast, setContrast, updateMode, setUpdateMode, checkNow, checking, canUpdate, accent, setAccent }: { user: string; site: string; signOut: () => void; dir: string | null; pick: () => Promise<string | null>; reset: () => void; mode: api.DlMode; setMode: (m: api.DlMode) => void; notify: (m: string) => void; theme: Theme; setTheme: (t: Theme) => void; contrast: Contrast; setContrast: (c: Contrast) => void; updateMode: api.UpdateMode; setUpdateMode: (m: api.UpdateMode) => void; checkNow: () => void; checking: boolean; canUpdate: boolean; accent: string; setAccent: (a: string) => void }) {
+  const [tab, setTab] = useState<(typeof SETTINGS_TABS)[number][0]>("general");
   const [files, setFiles] = useState<api.DlEntry[] | null>(null); const [confirm, setConfirm] = useState<string | null>(null);
   const reload = () => api.listDownloads().then(setFiles).catch(() => setFiles([]));
   useEffect(() => { reload(); }, []);
@@ -576,19 +579,32 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
   return (
     <div className="stack">
       <div className="bar"><h1>Settings</h1></div>
-      <div className="tabs"><button className={tab === "general" ? "tab on" : "tab"} onClick={() => setTab("general")}>General</button><button className={tab === "about" ? "tab on" : "tab"} onClick={() => setTab("about")}>About</button></div>
-      {tab === "general" ? (<>
+      <div className="tabs">{SETTINGS_TABS.map(([k, l]) => <button key={k} className={tab === k ? "tab on" : "tab"} onClick={() => setTab(k)}>{l}</button>)}</div>
+      {tab === "general" && (<>
       <section className="sec only-phone">
         <div className="sechead static">Account</div>
         <div className="setrow"><div className="grow"><b>{user}</b><small>{site}</small></div><button className="btn danger" onClick={signOut}>Sign out</button></div>
       </section>
+      <section className="sec">
+        <div className="sechead static">Updates</div>
+        <div className="setrow col"><b>When an update is available</b>
+          <div className="choices">{UPDATE_MODES.map(([k, t, d]) => <button key={k} className={updateMode === k ? "choice on" : "choice"} onClick={() => setUpdateMode(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
+        <div className="setrow"><div className="grow"><b>Check for updates now</b><small>{canUpdate ? "Downloads and installs from GitHub releases." : "In-app install isn't available for this package; updates open the release page."}</small></div>
+          <button className="btn" disabled={checking} onClick={checkNow}>{checking ? "Checking…" : "Check now"}</button></div>
+      </section>
+      </>)}
+      {tab === "appearance" && (<>
       <section className="sec">
         <div className="sechead static">Appearance</div>
         <div className="setrow col"><b>Theme</b>
           <div className="choices">{THEMES.map(([k, t, d]) => <button key={k} aria-pressed={theme === k} className={theme === k ? "choice on" : "choice"} onClick={() => setTheme(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
         <div className="setrow col"><div><b>High contrast</b><small>Stronger text and borders, plain colours and clear focus outlines</small></div>
           <div className="choices">{CONTRASTS.map(([k, t, d]) => <button key={k} aria-pressed={contrast === k} className={contrast === k ? "choice on" : "choice"} onClick={() => setContrast(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
+        <div className="setrow col"><b>Accent colour</b>
+          <div className="swatches">{ACCENTS.map(([c, n]) => <button key={n} aria-pressed={accent === c} aria-label={n} title={n} className={accent === c ? "swatch on" : "swatch"} style={{ background: c || "#1f5c4a" }} onClick={() => setAccent(c)} />)}</div></div>
       </section>
+      </>)}
+      {tab === "downloads" && (<>
       <section className="sec">
         <div className="sechead static">Downloads</div>
         <div className="setrow desk"><div className="grow"><b>Download folder</b><small>{shownDir ?? "…"}{!dir && shownDir ? " (default)" : ""}</small></div>
@@ -597,13 +613,6 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
           {shownDir && <button className="btn" onClick={() => api.openLocal(shownDir).catch(() => notify("That folder doesn't exist yet"))}>Open folder</button>}</div>
         <div className="setrow col"><b>When a file is already saved</b>
           <div className="choices">{MODES.map(([k, t, d]) => <button key={k} className={mode === k ? "choice on" : "choice"} onClick={() => setMode(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
-      </section>
-      <section className="sec">
-        <div className="sechead static">Updates</div>
-        <div className="setrow col"><b>When an update is available</b>
-          <div className="choices">{UPDATE_MODES.map(([k, t, d]) => <button key={k} className={updateMode === k ? "choice on" : "choice"} onClick={() => setUpdateMode(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
-        <div className="setrow"><div className="grow"><b>Check for updates now</b><small>{canUpdate ? "Downloads and installs from GitHub releases." : "In-app install isn't available for this package; updates open the release page."}</small></div>
-          <button className="btn" disabled={checking} onClick={checkNow}>{checking ? "Checking…" : "Check now"}</button></div>
       </section>
       <section className="sec">
         <div className="sechead static"><span>Saved files</span><span className="muted">{files ? `${plural(files.length)} · ${size(sum(files))}` : ""}</span></div>
@@ -623,7 +632,8 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
         {!!files?.length && <div className="setrow"><div className="grow muted">Only files Zenith downloaded are listed or removed; anything else in your folder is never touched. Files saved by older versions aren't tracked.</div>
           <button className="btn danger" onClick={() => ask("all", () => del())}>{confirm === "all" ? "Click to confirm" : "Delete all downloads"}</button></div>}
       </section>
-      </>) : <About />}
+      </>)}
+      {tab === "about" && <About />}
     </div>);
 }
 
@@ -679,6 +689,8 @@ export default function App() {
   useEffect(() => { const mq = matchMedia("(prefers-contrast: more)"); const f = () => setOsHigh(mq.matches); mq.addEventListener("change", f); return () => mq.removeEventListener("change", f); }, []);
   const high = contrast === "on" || (contrast === "system" && osHigh);
   const setTheme = (t: Theme) => { localStorage.setItem("theme", t); setThemeState(t); };
+  const [accent, setAccentState] = useState(() => { const v = localStorage.getItem("accent") ?? ""; return ACCENTS.some(([c]) => c === v) ? v : ""; });
+  const setAccent = (a: string) => { localStorage.setItem("accent", a); setAccentState(a); };
   const setContrast = (c: Contrast) => { localStorage.setItem("contrast", c); setContrastState(c); };
   const [setup, setSetup] = useState(!seenSetup());
   useEffect(() => { if (session && setup) { localStorage.setItem("onboarded", "1"); setSetup(false); } }, [session]);   // existing users never see it
@@ -687,7 +699,8 @@ export default function App() {
     const r = document.documentElement;
     if (theme === "system") delete r.dataset.theme; else r.dataset.theme = theme;
     if (high) r.dataset.contrast = "high"; else delete r.dataset.contrast;
-  }, [theme, high]);
+    if (accent) { r.dataset.accent = ""; r.style.setProperty("--a", accent); } else { delete r.dataset.accent; r.style.removeProperty("--a"); }
+  }, [theme, high, accent]);
   const [explore, setExplore] = useState(false); const [enrolledIds, setEnrolledIds] = useState<Set<number>>(new Set());
   const [stack, setStack, back, clear] = useCourseStack<api.Course>(); const [q, setQ] = useState("");
   const open_ = stack[stack.length - 1] ?? null;
@@ -880,7 +893,7 @@ export default function App() {
             onJoined={(c) => { setExplore(false); setStack([c]); setEnrolledIds((s) => new Set(s).add(c.id)); load(filter); }} />
         ) : settingsOpen ? (
           <Settings user={info?.fullname ?? ""} site={info?.sitename ?? ""} signOut={signOut} dir={dir} pick={pick} reset={resetDir} mode={dlMode} setMode={changeMode} notify={notify} theme={theme} setTheme={setTheme} contrast={contrast} setContrast={setContrast}
-            updateMode={updateMode} setUpdateMode={setUpdateMode} checkNow={() => void checkForUpdate(true)} checking={updatePhase === "checking"} canUpdate={canSelfUpdate} />
+            updateMode={updateMode} setUpdateMode={setUpdateMode} checkNow={() => void checkForUpdate(true)} checking={updatePhase === "checking"} canUpdate={canSelfUpdate} accent={accent} setAccent={setAccent} />
         ) : (<>
           <div className="bar"><h1>My courses</h1><input className="search" placeholder="Search courses…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
           {!!due.length && <section className="duecard" aria-label="Upcoming assignments">

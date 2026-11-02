@@ -30,7 +30,7 @@ main{overflow:auto;padding:clamp(16px,3vw,28px) calc(clamp(16px,4vw,36px) + env(
 .sechead{display:flex;justify-content:space-between;align-items:center;width:100%;padding:13px 18px;font:600 16px var(--serif)}.chev{transition:.2s;display:grid}.chev.shut{transform:rotate(-90deg)}
 .item{display:flex;align-items:center;gap:14px;width:100%;padding:11px 18px;border-top:1px solid var(--line);font-size:14px;color:var(--mut)}.item:hover{background:var(--tint)}.item .grow{color:var(--fg)}
 .ico{width:34px;height:34px;border-radius:var(--r);background:var(--tint);color:var(--accfg);display:grid;place-items:center}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 18px;border-radius:var(--r);font-size:14px;display:flex;flex-direction:column;gap:6px;min-width:220px;max-width:min(420px,calc(100vw - 32px));text-align:center}
+.toast{position:fixed;z-index:20;bottom:24px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 18px;border-radius:var(--r);font-size:14px;display:flex;flex-direction:column;gap:6px;min-width:220px;max-width:min(420px,calc(100vw - 32px));text-align:center}
 .dlbar{height:4px;border-radius:99px;background:#8888;overflow:hidden}
 .dlbar i{display:block;height:100%;background:var(--bg);border-radius:99px;transition:width .15s}
 .dlbar.indet i{width:35%;animation:dlindet 1.1s ease-in-out infinite}
@@ -59,7 +59,7 @@ main{overflow:auto;padding:clamp(16px,3vw,28px) calc(clamp(16px,4vw,36px) + env(
 .html a{color:var(--accfg);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
 .html table{border-collapse:collapse;max-width:100%}.html td,.html th{border:1px solid var(--line);padding:6px 10px}
 
-.update{position:fixed;right:24px;bottom:24px;display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;box-shadow:0 6px 20px #0003;max-width:min(440px,calc(100vw - 32px));font-size:14px;flex-wrap:wrap}
+.update{position:fixed;z-index:20;right:24px;bottom:24px;display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;box-shadow:0 6px 20px #0003;max-width:min(440px,calc(100vw - 32px));font-size:14px;flex-wrap:wrap}
 .update .grow{display:flex;flex-direction:column;gap:4px}
 .update .dlbar{width:100%}
 .update .msg{font-size:12px;line-height:1.35;margin:0}
@@ -99,6 +99,13 @@ div.item{cursor:pointer}.item.locked{cursor:default}.item.locked:hover{backgroun
 .switch i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.15s}
 .switch.on{background:var(--acc)}.switch.on i{background:var(--accon)}.switch.on i{left:21px}
 /* high contrast */
+/* accent colour: --a is set by the app; skipped where color-mix is unsupported, so the default green stays */
+@supports(color:color-mix(in srgb,red,blue)){
+:root[data-accent]{--acc:var(--a);--accfg:var(--a);--accon:#fff;--tint:color-mix(in srgb,var(--a) 11%,transparent)}
+@media(prefers-color-scheme:dark){:root[data-accent]:not([data-theme="light"]){--acc:color-mix(in srgb,var(--a) 60%,white);--accfg:color-mix(in srgb,var(--a) 50%,white);--accon:#10151a;--tint:color-mix(in srgb,var(--a) 20%,transparent)}}
+:root[data-accent][data-theme="dark"]{--acc:color-mix(in srgb,var(--a) 60%,white);--accfg:color-mix(in srgb,var(--a) 50%,white);--accon:#10151a;--tint:color-mix(in srgb,var(--a) 20%,transparent)}
+}
+.swatches{display:flex;gap:12px;flex-wrap:wrap}.swatch{width:36px;height:36px;border-radius:50%;border:2px solid var(--line)}.swatch.on{outline:3px solid var(--fg);outline-offset:2px}
 :root[data-contrast="high"]{--bg:#fff;--card:#fff;--fg:#000;--mut:#2b2b2b;--line:#000;--side:#fff;--acc:#0b4a39;--accfg:#0b4a39;--accon:#fff;--tint:#0b4a3922;--hero:#0b3a2d;--err:#a8001c;--warnbg:#fff3b8;--warnfg:#000;--warnline:#000}
 @media(prefers-color-scheme:dark){:root[data-contrast="high"]:not([data-theme="light"]){--bg:#000;--card:#000;--fg:#fff;--mut:#e6e6e6;--line:#fff;--side:#000;--acc:#8fdcbc;--accfg:#a9ecd0;--accon:#000;--tint:#a9ecd033;--hero:#000;--err:#ff9aa8;--warnbg:#000;--warnfg:#ffe27a;--warnline:#ffe27a;color-scheme:dark}}
 :root[data-contrast="high"][data-theme="dark"]{--bg:#000;--card:#000;--fg:#fff;--mut:#e6e6e6;--line:#fff;--side:#000;--acc:#8fdcbc;--accfg:#a9ecd0;--accon:#000;--tint:#a9ecd033;--hero:#000;--err:#ff9aa8;color-scheme:dark}
@@ -141,7 +148,7 @@ button{touch-action:manipulation}
 .only-phone{display:none}
 :root[data-mobile] .desk{display:none}   /* what a phone cannot do, e.g. choosing a download folder */
 @media(hover:none){.dots{opacity:1}}   /* no hover on touch, so the course menu button is always shown */
-@media(pointer:coarse){.icon{min-width:44px;min-height:44px}.tab{padding:13px 0}.item{padding-block:14px}.menu button{padding:13px 12px}.btn{padding:11px 16px}}
+@media(pointer:coarse){.swatch{width:44px;height:44px}.icon{min-width:44px;min-height:44px}.tab{padding:13px 0}.item{padding-block:14px}.menu button{padding:13px 12px}.btn{padding:11px 16px}}
 
 /* Phones (narrower than 600px, the usual compact width): the sidebar becomes a bottom bar. Tablets keep the sidebar. */
 @media(max-width:599.98px){
