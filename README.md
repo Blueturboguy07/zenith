@@ -8,6 +8,12 @@ Runs on **Linux, Windows, macOS and Android**. iOS is not supported yet (see [`M
 
 Download page: <https://zac06.github.io/zenith/> (source in [`docs/`](docs), published with GitHub Pages).
 
+On Linux (x86_64) and macOS you can also install the latest release from a terminal:
+
+```bash
+curl -fsSL https://zac06.github.io/zenith/install.sh | sh
+```
+
 Codebase documentation: <https://deepwiki.com/Zac06/zenith> (generated from this repository).
 
 ## Screenshots
