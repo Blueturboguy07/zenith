@@ -23,7 +23,7 @@ export type Session = { site: string; token: string };
 export type Info = { userid: number; fullname: string; sitename: string };
 export type Filter = "all" | "inprogress" | "future" | "past" | "favourites" | "hidden";
 export type Course = { id: number; fullname: string; shortname: string; progress?: number | null; courseimage?: string; isfavourite?: boolean; hidden?: boolean };
-export type FileItem = { type: string; filename: string; fileurl: string; filesize: number; timemodified?: number; mimetype?: string };
+export type FileItem = { type: string; filename: string; filepath?: string; fileurl: string; filesize: number; timemodified?: number; mimetype?: string };
 export type Module = { id: number; name: string; modname: string; instance?: number; uservisible?: boolean; availabilityinfo?: string; url?: string; description?: string; contents?: FileItem[] };
 // component/itemid are set on sections that belong to a subsection activity (Moodle 4.5+)
 export type Section = { id: number; name: string; summary?: string; component?: string | null; itemid?: number | null; modules: Module[] };
@@ -77,7 +77,8 @@ export const canSelfUpdate = async () => (demo ? true : invoke<boolean>("can_sel
 export const checkUpdate = async (): Promise<UpdateInfo | null> => {
   if (demo) return null;
   if (mobile) {
-    const u = await invoke<UpdateInfo | null>("check_update");
+    // real(), not invoke(): GitHub being unreachable must not mark Moodle as offline
+    const u = await real<UpdateInfo | null>("check_update");
     pendingApk = u?.apkUrl ?? null;
     return u;
   }
@@ -164,14 +165,17 @@ export const assignStatus = async (assignid: number): Promise<AssignStatus> => {
     grade: r.feedback?.gradefordisplay?.replace(/<[^>]*>/g, "").trim() || undefined,
     text: plugins.find((p) => p.type === "onlinetext")?.editorfields?.[0]?.text ?? "",
     files: plugins.find((p) => p.type === "file")?.fileareas?.[0]?.files ?? [],
-    canEdit: r.lastattempt?.canedit !== false && r.lastattempt?.locked !== true,
+    canEdit: r.lastattempt?.canedit === true && r.lastattempt?.locked !== true,
   };
 };
+// The answer is typed as plain text but Moodle stores it as HTML: escape it, or "a<b" is lost and the line breaks collapse.
+const asHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
 // Saves a draft. Plug-ins left out keep what is already saved, so editing the text never drops the attachments.
+if (import.meta.env.DEV) console.assert(asHtml("a<b\nc&d") === "a&lt;b<br>c&amp;d");
 export const saveSubmission = async (assignmentid: number, p: { text?: string; fileItemId?: number }) => {
   const params: Record<string, string> = { assignmentid: String(assignmentid) };
   if (p.text !== undefined) {
-    params["plugindata[onlinetext_editor][text]"] = p.text;
+    params["plugindata[onlinetext_editor][text]"] = asHtml(p.text);
     params["plugindata[onlinetext_editor][format]"] = "1";
     params["plugindata[onlinetext_editor][itemid]"] = "0";
   }
@@ -179,8 +183,8 @@ export const saveSubmission = async (assignmentid: number, p: { text?: string; f
   const r = await ws<any>("mod_assign_save_submission", params);
   if (Array.isArray(r) && r.length) throw new Error(r[0]?.message ?? "Moodle refused the submission");
 };
-export const submitForGrading = async (assignmentid: number) => {
-  const r = await ws<any>("mod_assign_submit_for_grading", { assignmentid: String(assignmentid), acceptsubmissionstatement: "1" });
+export const submitForGrading = async (assignmentid: number, accepted: boolean) => {
+  const r = await ws<any>("mod_assign_submit_for_grading", { assignmentid: String(assignmentid), acceptsubmissionstatement: accepted ? "1" : "0" });
   if (Array.isArray(r) && r.length) throw new Error(r[0]?.message ?? "Moodle refused the submission");
 };
 export const uploadDraftFile = (path: string, itemid: number, userid: number) =>
@@ -192,7 +196,7 @@ export const fetchContent = (url: string) => invoke<string>("fetch_content", { u
 // Announcements and every other forum: read the discussions without opening a browser.
 export type Discussion = { id: number; subject: string; message?: string; author?: string; created?: number; replies?: number };
 export const forumDiscussions = async (forumid: number) => {
-  const r = await ws<{ discussions?: any[] }>("mod_forum_get_forum_discussions", { forumid: String(forumid) });
+  const r = await ws<{ discussions?: any[] }>("mod_forum_get_forum_discussions", { forumid: String(forumid), perpage: "20" });
   return (r.discussions ?? []).map((d): Discussion => ({
     id: d.discussion ?? d.id,
     subject: d.subject || d.name || "(no subject)",

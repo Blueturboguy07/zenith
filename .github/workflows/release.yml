@@ -27,13 +27,19 @@ jobs:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
         with: { workspaces: "src-tauri -> target" }
+      - name: Tag matches the app version
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for f in package.json src-tauri/tauri.conf.json; do grep -q "\"version\": \"$v\"" "$f" || { echo "$f is not version $v"; exit 1; }; done
+          grep -q "^version = \"$v\"" src-tauri/Cargo.toml || { echo "Cargo.toml is not version $v"; exit 1; }
       - name: Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev patchelf
-      - run: npm install
+      - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +73,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with: { packages: "ndk;28.2.13676358" }   # the platform for compileSdk is downloaded by Gradle, which knows its exact package name
       - run: echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
-      - run: npm install
+      - run: npm ci
       - name: Set up Android signing
         env:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}

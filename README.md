@@ -19,8 +19,8 @@ Codebase documentation: <https://deepwiki.com/Zac06/zenith> (generated from this
 - **Connect to any Moodle site** by entering its address.
 - **Single sign-on (SSO)**: the login opens your institution's own login page in the system browser (Shibboleth, CAS, SAML, OAuth2, Microsoft/Google...). The app then receives the session token through a `zenith://` deep link. Sites that use plain username/password login are supported too.
 - **Courses** with filters (All, In progress, Future, Ended, Favourites, Hidden), search, progress bars, course images (with a generated gradient fallback), and a per-card menu to favourite, hide or unhide a course.
-- **Course contents**: sections, resources, folders and links.
-- **Assignments**: assignments in a course show their due date. Open one for the description, attachments, submission status and grade. Submitting happens in the browser.
+- **Course contents**: sections, resources, folders and links. Forums list their latest posts; replies open in the browser.
+- **Assignments**: assignments in a course show their due date. Open one for the description, attachments, submission status and grade, and submit text or files from the app.
 - **Explore**: search all courses on the site by course name, department and teacher, and self-enrol (with an enrolment key if required). Other enrolment methods are finished in the browser.
 - **Downloads**: files are saved to `Downloads/Zenith` (or a folder you choose in Settings), organised by course, and opened with the system default application. On Android they stay in the app's own storage and open in the app you pick. You choose whether to re-download only when Moodle's copy is newer (default), always reuse the saved copy, or always download again.
 - **Settings**: theme (system, light, dark), high contrast, download folder and behaviour, and a list of the files Zenith saved, which you can delete per file, per course or all at once.
@@ -159,12 +159,17 @@ zenith/
 | `start_sso`              | Open the browser-based SSO login                            |
 | `login_password`         | Username/password login through `login/token.php`           |
 | `ws_call`                | Generic Moodle web-service call                             |
-| `download_file`          | Download a file (token added in Rust), then open it         |
+| `download_file`          | Download a file (token added in Rust), then open it. Programs and scripts are shown in their folder instead of being started |
 | `list_downloads` / `delete_downloads` | List or delete the files Zenith saved      |
 | `default_download_dir`   | Default folder (`Downloads/Zenith`; the app's own storage on Android) |
 | `is_mobile`              | Lets the UI hide what a phone cannot do                     |
 | `open_local` / `open_external` | Open a saved file or a web link with the system default |
 | `open_authed`            | Open a site URL in the browser, logged in via auto-login key |
+| `reachable`              | HEAD request to the site, to tell offline from online       |
+| `fetch_content`          | Load a saved HTML resource with the token, to show it in the app |
+| `upload_draft_file`      | Upload a file to the user's Moodle draft area (assignment submissions) |
+| `reveal_file`            | Show a saved file in the desktop file manager               |
+| `screenshot_mode`        | True with `--screenshot`: the UI shows invented data        |
 | `check_update`           | Compare the latest GitHub release with the running version  |
 | `can_self_update` / `download_update` / `install_update` | Android APK update support (desktop updates use the updater plugin) |
 | `get_session` / `logout` | Restore or clear the session in the OS keychain             |
@@ -173,13 +178,12 @@ zenith/
 
 - Only browser-based SSO is supported (see the Moodle requirements above).
 - Android only: no Play Store listing and ARM devices only (no x86 emulator). iOS is not supported yet.
-- Files are downloaded in one request, held in memory and then written to disk, without a progress indicator.
 - Hiding courses relies on Moodle allowing the preference update through the mobile service. Some sites may block it.
-- Assignments are read-only (submitting opens the browser). Calendar, forums, grades and messaging are not implemented yet; those activities open in the browser.
+- Online-text answers are saved as plain text; formatting in an answer you edit in the app is lost. Calendar, grades and messaging are not implemented; those activities open in the browser.
 
 ## Roadmap ideas
 
-Assignments and deadlines, dashboard with upcoming events, forums, grades, download progress, in-app auto-install of updates (`tauri-plugin-updater`).
+Reading and writing forum replies, grades, a calendar of upcoming events.
 
 ## Troubleshooting
 

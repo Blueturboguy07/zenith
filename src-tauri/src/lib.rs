@@ -13,6 +13,33 @@ use tauri_plugin_ios_native::IosNativeExt;
 const SERVICE: &str = "moodle_mobile_app";
 const SCHEME: &str = "zenith";
 
+/// One client for the whole app, so connections are reused instead of a new TLS handshake for every call.
+fn http() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("Zenith/0.2")
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .build()
+            .expect("http client")
+    })
+}
+
+/// reqwest prints the full URL in its errors, and our file URLs carry the login token: never show that part.
+fn net_err(e: reqwest::Error) -> String {
+    e.without_url().to_string()
+}
+
+/// Programs and scripts: a file saved by the app has no "downloaded from the internet" mark, so these are shown in
+/// their folder instead of being started by a click.
+const RUNNABLE: &[&str] = &[
+    "exe", "msi", "bat", "cmd", "com", "scr", "pif", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta",
+    "lnk", "reg", "cpl", "jar", "sh", "bash", "py", "command", "app", "pkg", "apk", "appimage", "desktop", "run",
+];
+
+/// Serialises read-modify-write of downloads.json, so two downloads finishing together keep both entries.
+static MANIFEST: Mutex<()> = Mutex::new(());
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Session {
     site: String,
@@ -74,8 +101,13 @@ mod secret {
 
 fn normalize_site(input: &str) -> String {
     let mut s = input.trim().to_string();
-    if !s.starts_with("http://") && !s.starts_with("https://") {
-        s = format!("https://{s}");
+    // the scheme is case-insensitive, and a phone keyboard likes to capitalise the first letter
+    match s.find("://").filter(|&i| s[..i].chars().all(|c| c.is_ascii_alphabetic())) {
+        Some(i) => {
+            let scheme = s[..i].to_ascii_lowercase();
+            s.replace_range(..i, &scheme);
+        }
+        None => s = format!("https://{s}"),
     }
     let start = s.find("://").map(|i| i + 3).unwrap_or(0);
     // cut known Moodle sub-paths, but only on whole path segments (so "/mycampus" is preserved)
@@ -95,6 +127,10 @@ fn normalize_site(input: &str) -> String {
                 break;
             }
         }
+    }
+    // a pasted browser address can carry "?lang=it" or "#top"; neither belongs in the base address
+    if let Some(i) = s[start..].find(['?', '#']) {
+        cut_at = cut_at.min(start + i);
     }
     s.truncate(cut_at);
     s.trim_end_matches('/').to_string()
@@ -130,19 +166,16 @@ async fn resolve_site(input: String) -> Result<Value, String> {
     let site = normalize_site(&input);
     require_https(&site)?;
     let body = serde_json::json!([{ "index": 0, "methodname": "tool_mobile_get_public_config", "args": {} }]);
-    let client = reqwest::Client::builder()
-        .user_agent("Zenith/0.2")
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
+    let resp = http()
         .post(format!("{site}/lib/ajax/service-nologin.php"))
+        .timeout(std::time::Duration::from_secs(20))
         .query(&[("info", "tool_mobile_get_public_config")])
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Can't reach {site}: {e}"))?;
+        .map_err(|e| format!("Can't reach {site}: {}", net_err(e)))?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let text = resp.text().await.map_err(net_err)?;
     let v: Value = serde_json::from_str(&text).map_err(|_| {
         format!(
             "{site} didn't return Moodle JSON (HTTP {status}). Is the URL the Moodle base address?"
@@ -276,8 +309,9 @@ async fn login_password(
     password: String,
 ) -> Result<(), String> {
     require_https(&site)?;
-    let res: Value = reqwest::Client::new()
+    let res: Value = http()
         .post(format!("{site}/login/token.php"))
+        .timeout(std::time::Duration::from_secs(20))
         .form(&[
             ("username", username),
             ("password", password),
@@ -285,10 +319,10 @@ async fn login_password(
         ])
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(net_err)?
         .json()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "The site did not answer like Moodle. Check the address.".to_string())?;
     match res.get("token").and_then(|t| t.as_str()) {
         Some(t) => {
             store(
@@ -312,16 +346,15 @@ async fn login_password(
     }
 }
 
-/// Generic Moodle web-service call. Nested params use Moodle's flat syntax, e.g. "courseids[0]".
 /// navigator.onLine and the online/offline events are unreliable in the Android WebView, so ask the network:
 /// any HTTP answer from the site counts as online.
 #[tauri::command]
 async fn reachable(state: State<'_, AppState>) -> Result<bool, String> {
     let Some(s) = state.session.lock().unwrap().clone() else { return Ok(true) };
-    let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
-    Ok(c.head(&s.site).send().await.is_ok())
+    Ok(http().head(&s.site).timeout(std::time::Duration::from_secs(5)).send().await.is_ok())
 }
 
+/// Generic Moodle web-service call. Nested params use Moodle's flat syntax, e.g. "courseids[0]".
 #[tauri::command]
 async fn ws_call(
     state: State<'_, AppState>,
@@ -341,19 +374,16 @@ async fn ws_call(
     form.insert("moodlewssettingfilter".into(), "true".into()); // resolves multilingual names/summaries
     // file URLs must point at the token-authenticated endpoint; plain pluginfile.php needs a browser session
     form.insert("moodlewssettingfileurl".into(), "true".into());
-    let v: Value = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?
+    let v: Value = http()
         .post(format!("{}/webservice/rest/server.php", s.site))
+        .timeout(std::time::Duration::from_secs(60))
         .form(&form)
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(net_err)?
         .json()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(net_err)?;
     if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
         if v.get("exception").is_some() {
             let code = v.get("errorcode").and_then(|c| c.as_str()).unwrap_or("");
@@ -403,6 +433,7 @@ fn now_secs() -> u64 {
 
 /// Records a saved file. `only_new` keeps the original date when a copy was already on disk.
 fn track(app: &AppHandle, path: &str, course: &str, name: &str, only_new: bool) {
+    let _lock = MANIFEST.lock().unwrap_or_else(|e| e.into_inner());
     let mut m = load_manifest(app);
     if only_new && m.iter().any(|e| e.path == path) {
         return;
@@ -458,6 +489,17 @@ fn launch(app: &AppHandle, target: &str) -> Result<(), String> {
             }
         }
         if let Ok(mut child) = cmd.spawn() {
+            // xdg-open exits within moments, with an error code, when nothing can open the target
+            for _ in 0..12 {
+                match child.try_wait() {
+                    Ok(Some(st)) if !st.success() => {
+                        return Err("Couldn't open that. It may be missing, or no app is set up for this type.".into())
+                    }
+                    Ok(Some(_)) => return Ok(()),
+                    _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+                }
+            }
+            // shortcut: a viewer still running after 0.6 s counts as opened, upgrade if a desktop reports failures later
             std::thread::spawn(move || {
                 let _ = child.wait();
             });
@@ -488,6 +530,27 @@ fn open_file(app: &AppHandle, path: &str) -> Result<(), String> {
     app.opener()
         .open_path(path.to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// Opens a saved course file with its default app, except programs and scripts, which are shown in their folder.
+fn open_saved(app: &AppHandle, path: &str) -> Result<(), String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !RUNNABLE.contains(&ext.as_str()) {
+        return launch(app, path);
+    }
+    #[cfg(desktop)]
+    return reveal_file(app.clone(), path.to_string());
+    #[cfg(mobile)]
+    return Ok(());
+}
+
+/// The page may only open files this app saved (or a folder): it never gets to start an arbitrary path.
+fn is_ours(app: &AppHandle, path: &str) -> bool {
+    !std::path::Path::new(path).is_file() || load_manifest(app).iter().any(|e| e.path == path)
 }
 
 #[tauri::command]
@@ -548,11 +611,14 @@ async fn download_file(
         return Err("Refusing to download from a different host".into());
     }
     let clean = |x: &str| {
-        x.chars()
+        let c = x
+            .chars()
             .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
             .collect::<String>()
             .trim()
-            .to_string()
+            .to_string();
+        // ".." would step out of the folder
+        if c == "." || c == ".." { "_".to_string() } else { c }
     };
     // empty dir = the default folder (system Downloads/Zenith); the folder is chosen in Settings only
     let mut path = if dir.trim().is_empty() {
@@ -560,12 +626,12 @@ async fn download_file(
     } else {
         std::path::PathBuf::from(dir)
     };
-    let sub = clean(&subdir);
-    path.push(if sub.is_empty() {
-        "Moodle".to_string()
-    } else {
-        sub
-    });
+    // "Course/12" = a folder per course and per activity, so same-named files in different activities don't collide
+    let parts: Vec<String> = subdir.split('/').map(|x| clean(x)).filter(|x| !x.is_empty()).collect();
+    if parts.is_empty() {
+        path.push("Moodle");
+    }
+    path.extend(parts);
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     path.push(clean(&filename));
     let p = path.to_string_lossy().to_string();
@@ -582,7 +648,7 @@ async fn download_file(
         if up_to_date {
             // adopt a saved copy we don't track yet, so it can be re-downloaded or cleared later
             track(&app, &p, &subdir, &filename, true);
-            launch(&app, &p)?;
+            open_saved(&app, &p)?;
             return Ok(serde_json::json!({ "path": p, "reused": true }));
         }
     }
@@ -593,7 +659,7 @@ async fn download_file(
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(60))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(net_err)?;
     let resp = match client
         .get(format!("{url}{sep}token={}", s.token))
         .send()
@@ -604,13 +670,13 @@ async fn download_file(
             // without a connection, a copy saved earlier is still useful
             if path.is_file() {
                 track(&app, &p, &subdir, &filename, true);
-                launch(&app, &p)?;
+                open_saved(&app, &p)?;
                 return Ok(serde_json::json!({ "path": p, "reused": true }));
             }
-            return Err(e.to_string());
+            return Err(net_err(e));
         }
     };
-    let mut resp = resp.error_for_status().map_err(|e| e.to_string())?;
+    let mut resp = resp.error_for_status().map_err(net_err)?;
     let is_json = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -618,7 +684,7 @@ async fn download_file(
         .map_or(false, |t| t.starts_with("application/json"));
     // Moodle can answer 200 with a JSON error instead of the file; don't save that as the file
     if is_json && !filename.to_lowercase().ends_with(".json") {
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        let bytes = resp.bytes().await.map_err(net_err)?;
         let msg = serde_json::from_slice::<Value>(&bytes)
             .ok()
             .and_then(|v| v["message"].as_str().or(v["error"].as_str()).map(String::from))
@@ -654,7 +720,7 @@ async fn download_file(
             Err(e) => {
                 drop(file);
                 let _ = std::fs::remove_file(&part);
-                return Err(e.to_string());
+                return Err(net_err(e));
             }
         }
     }
@@ -672,12 +738,13 @@ async fn download_file(
     // remember what we saved, so "clear downloads" only ever touches our own files
     track(&app, &p, &subdir, &filename, false);
 
-    launch(&app, &p)?;
+    open_saved(&app, &p)?;
     Ok(serde_json::json!({ "path": p, "reused": false }))
 }
 
 #[tauri::command]
 fn list_downloads(app: AppHandle) -> Vec<DlEntry> {
+    let _lock = MANIFEST.lock().unwrap_or_else(|e| e.into_inner());
     let mut m = load_manifest(&app);
     m.retain(|e| std::path::Path::new(&e.path).is_file());
     for e in m.iter_mut() {
@@ -693,6 +760,7 @@ fn list_downloads(app: AppHandle) -> Vec<DlEntry> {
 /// Deletes the given tracked files (or all tracked files when paths is null). Returns how many were removed.
 #[tauri::command]
 fn delete_downloads(app: AppHandle, paths: Option<Vec<String>>) -> u64 {
+    let _lock = MANIFEST.lock().unwrap_or_else(|e| e.into_inner());
     let mut n = 0u64;
     let mut m = load_manifest(&app);
     m.retain(|e| {
@@ -714,7 +782,10 @@ fn delete_downloads(app: AppHandle, paths: Option<Vec<String>>) -> u64 {
 
 #[tauri::command]
 fn open_local(app: AppHandle, path: String) -> Result<(), String> {
-    launch(&app, &path)
+    if !is_ours(&app, &path) {
+        return Err("That file was not saved by Zenith".into());
+    }
+    open_saved(&app, &path)
 }
 
 /// Shows a saved file in the desktop's file manager. Phones have no user-visible download folder.
@@ -724,6 +795,9 @@ fn reveal_file(app: AppHandle, path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if !p.exists() {
         return Err("That file is no longer there".into());
+    }
+    if !is_ours(&app, &path) {
+        return Err("That file was not saved by Zenith".into());
     }
     #[cfg(target_os = "macos")]
     let _ = &app;
@@ -779,18 +853,15 @@ async fn fetch_content(state: State<'_, AppState>, url: String) -> Result<String
     }
     let mut u = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
     u.query_pairs_mut().append_pair("token", &s.token);
-    let resp = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(45))
-        .build()
-        .map_err(|e| e.to_string())?
+    let resp = http()
         .get(u)
+        .timeout(std::time::Duration::from_secs(45))
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(net_err)?
         .error_for_status()
-        .map_err(|e| e.to_string())?;
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        .map_err(net_err)?;
+    let bytes = resp.bytes().await.map_err(net_err)?;
     // 4 MB is far beyond a normal resource page and keeps a wrong file from freezing the UI
     if bytes.len() > 4 * 1024 * 1024 {
         return Err("That page is too large to show in the app".into());
@@ -831,19 +902,16 @@ async fn upload_draft_file(
     form.insert("filecontent", STANDARD.encode(&bytes));
     form.insert("contextlevel", "user".into());
     form.insert("instanceid", userid.to_string());
-    let v: Value = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?
+    let v: Value = http()
         .post(format!("{}/webservice/rest/server.php", s.site))
+        .timeout(std::time::Duration::from_secs(120))
         .form(&form)
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(net_err)?
         .json()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(net_err)?;
     if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
         if v.get("exception").is_some() {
             return Err(msg.to_string());
@@ -887,13 +955,14 @@ async fn open_authed(
         if let Some(pt) = s.private_token.clone() {
             let res: Result<String, String> = async {
                 // Moodle only issues auto-login keys to requests that identify as its app (errorcode apprequired), so this one call keeps the MoodleMobile token
-                let client = reqwest::Client::builder()
-                    .user_agent("Zenith/0.2 MoodleMobile")
-                    .build()
-                    .map_err(|e| e.to_string())?;
+                let ua = "Zenith/0.2 MoodleMobile";
+                let limit = std::time::Duration::from_secs(20);
+                let client = http();
                 let endpoint = format!("{}/webservice/rest/server.php", s.site);
                 let info: Value = client
                     .post(&endpoint)
+                    .header(reqwest::header::USER_AGENT, ua)
+                    .timeout(limit)
                     .form(&[
                         ("wstoken", s.token.as_str()),
                         ("wsfunction", "core_webservice_get_site_info"),
@@ -901,13 +970,15 @@ async fn open_authed(
                     ])
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?
+                    .map_err(net_err)?
                     .json()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(net_err)?;
                 let uid = info["userid"].as_u64().ok_or("no userid")?;
                 let v: Value = client
                     .post(&endpoint)
+                    .header(reqwest::header::USER_AGENT, ua)
+                    .timeout(limit)
                     .form(&[
                         ("wstoken", s.token.as_str()),
                         ("wsfunction", "tool_mobile_get_autologin_key"),
@@ -916,10 +987,10 @@ async fn open_authed(
                     ])
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?
+                    .map_err(net_err)?
                     .json()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(net_err)?;
                 let key = v["key"].as_str().ok_or_else(|| {
                     v["message"]
                         .as_str()
@@ -978,48 +1049,35 @@ fn parse_ver(v: &str) -> Vec<u64> {
     n
 }
 
-fn apk_asset(v: &Value) -> Option<String> {
-    v["assets"].as_array()?.iter().find_map(|a| {
-        let name = a["name"].as_str()?;
-        name.to_ascii_lowercase()
-            .ends_with(".apk")
-            .then(|| a["browser_download_url"].as_str().map(String::from))
-            .flatten()
-    })
-}
-
-/// Checks the latest published GitHub release; returns it only if newer than the running version.
+/// Checks the latest published release; returns it only if newer than the running version. Reads latest.json, the file
+/// the desktop updater uses, rather than the GitHub API, which allows only 60 calls an hour per IP (a campus shares one).
 #[tauri::command]
 async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
     if cfg!(target_os = "ios") {
         return Ok(None); // iOS is not a supported build yet
     }
-    let v: Value = reqwest::Client::builder()
-        .user_agent("Zenith-update-check")
+    let v: Value = http()
+        .get("https://github.com/zac06/zenith/releases/latest/download/latest.json")
         .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?
-        .get("https://api.github.com/repos/zac06/zenith/releases/latest")
-        .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(net_err)?
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        .map_err(net_err)?
         .json()
         .await
-        .map_err(|e| e.to_string())?;
-    let tag = v["tag_name"].as_str().ok_or("no tag in release")?;
+        .map_err(net_err)?;
+    let version = v["version"].as_str().ok_or("no version in release")?.trim_start_matches('v');
     let current = app.package_info().version.to_string();
-    if parse_ver(tag) > parse_ver(&current) {
+    if parse_ver(version) > parse_ver(&current) {
+        let tag = format!("v{version}");
+        let base = "https://github.com/zac06/zenith/releases";
         Ok(Some(UpdateInfo {
-            version: tag.trim_start_matches('v').to_string(),
-            url: v["html_url"]
-                .as_str()
-                .unwrap_or("https://github.com/zac06/zenith/releases/latest")
-                .to_string(),
-            notes: v["body"].as_str().unwrap_or("").chars().take(400).collect(),
-            apk_url: apk_asset(&v),
+            version: version.to_string(),
+            url: format!("{base}/tag/{tag}"),
+            notes: v["notes"].as_str().unwrap_or("").chars().take(400).collect(),
+            // the release workflow names the APK Zenith_<tag>.apk
+            apk_url: Some(format!("{base}/download/{tag}/Zenith_{tag}.apk")),
         }))
     } else {
         Ok(None)
@@ -1224,17 +1282,34 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{apk_asset, callback_matches, clear_pending, read_pending, require_https, same_origin, save_pending};
+    use super::{callback_matches, clear_pending, normalize_site, parse_ver, read_pending, require_https, same_origin, save_pending, RUNNABLE};
     #[test]
-    fn finds_the_apk_asset() {
-        let release = serde_json::json!({
-            "assets": [
-                { "name": "Zenith_0.2.3_amd64.AppImage", "browser_download_url": "https://github.com/x/y" },
-                { "name": "Zenith_v0.2.3.apk", "browser_download_url": "https://github.com/x/z.apk" }
-            ]
-        });
-        assert_eq!(apk_asset(&release).as_deref(), Some("https://github.com/x/z.apk"));
-        assert_eq!(apk_asset(&serde_json::json!({ "assets": [] })), None);
+    fn site_address_cleanup() {
+        for (typed, want) in [
+            ("moodle.uni.edu", "https://moodle.uni.edu"),
+            ("HTTPS://moodle.uni.edu", "https://moodle.uni.edu"),
+            ("Https://Moodle.uni.edu/", "https://Moodle.uni.edu"),
+            ("https://moodle.uni.edu/?lang=it", "https://moodle.uni.edu"),
+            ("https://moodle.uni.edu/#top", "https://moodle.uni.edu"),
+            ("https://moodle.uni.edu/my/", "https://moodle.uni.edu"),
+            ("https://moodle.uni.edu/login/index.php", "https://moodle.uni.edu"),
+            ("https://moodle.uni.edu/mycampus", "https://moodle.uni.edu/mycampus"),
+            ("uni.edu/moodle/course/view.php?id=3", "https://uni.edu/moodle"),
+        ] {
+            assert_eq!(normalize_site(typed), want, "{typed}");
+        }
+        assert!(require_https(&normalize_site("ftp://moodle.uni.edu")).is_err());
+    }
+    #[test]
+    fn version_compare() {
+        assert!(parse_ver("v0.2.4") > parse_ver("0.2.3"));
+        assert!(parse_ver("0.10.0") > parse_ver("0.9.9"));
+        assert!(parse_ver("0.2.3") == parse_ver("v0.2.3"));
+    }
+    #[test]
+    fn programs_are_not_opened() {
+        assert!(RUNNABLE.contains(&"exe") && RUNNABLE.contains(&"bat"));
+        assert!(!RUNNABLE.contains(&"pdf") && !RUNNABLE.contains(&"docx"));
     }
     #[test]
     fn origin_check() {
