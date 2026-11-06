@@ -30,3 +30,5 @@ The complete changed source of each publik release is this repository at the com
 
 From version 0.2.3 the desktop app updates itself (`tauri-plugin-updater`). The update address (`github.com/zac06/zenith/releases/latest/download/latest.json`) and the public key in `src-tauri/tauri.conf.json` are those of the original author. They are not changed here.
 So a build from this branch updates itself to the original build: that build is not signed by publik and it sends no usage counts. publik has no update feed for this app. Decide on the update feed before a publik release is made from this branch.
+
+For the same reason `publik-build.yml` does not build this branch as it is: `tauri build` stops with "A public key has been found, but no private key" (it wants the updater signing key of the original author, which publik does not have). The publik release `v0.2.2-publik.1` comes from the branch `telemetry/v1`, where the app has no updater.
