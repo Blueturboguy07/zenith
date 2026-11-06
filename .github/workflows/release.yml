@@ -1,10 +1,14 @@
 name: release
+# publik build (see PUBLIK-BUILD.md): a tag "v<version>-publik.<n>" marks a publik release. Its files are built by
+# publik-build.yml, then signed, notarized and checked by hand. This workflow must never build for such a tag:
+# tauri-action would replace the checked files of that release with files that are not signed.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "!v*-publik*"]
 
 jobs:
   build:
+    if: ${{ !contains(github.ref_name, '-publik') }}
     permissions:
       contents: write
     strategy:
@@ -56,6 +60,7 @@ jobs:
   android:
     # the desktop job above creates the draft release; this one adds the signed APK to it
     needs: build
+    if: ${{ !contains(github.ref_name, '-publik') }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
