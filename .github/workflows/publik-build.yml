@@ -1,0 +1,175 @@
+# publik build: builds the desktop downloads of this fork from the branch and keeps them as workflow artifacts.
+#   macOS   universal Zenith.app, NOT signed here (no certificate in CI). publik signs it with its Developer ID,
+#           notarizes it, staples it and makes the dmg on a Mac.
+#   Windows Zenith_<version>_x64-setup.exe and Zenith_<version>_x64_en-US.msi, not signed.
+#   Linux   .AppImage, .deb, .rpm.
+# The build commands are the ones of release.yml (npm install, tauri build), without tauri-action.
+# This workflow NEVER creates, changes or publishes a release. See PUBLIK-BUILD.md.
+name: publik-build
+
+on:
+  push:
+    branches: ["telemetry/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publik-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS universal (Zenith.app, not signed)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+      - run: npm install
+      # "--bundles app": the dmg is made later, from the notarized and stapled app.
+      - name: Build the app (not signed)
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app
+      - name: The build must use the committed Cargo.lock
+        run: git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Pack the app (ditto keeps symlinks)
+        id: pack
+        run: |
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Zenith.app
+          test -d "$app" || { echo "No Zenith.app was produced."; exit 1; }
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+          exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          want="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          echo "version: $version (want $want)  bundle id: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")"
+          echo "architectures: $(lipo -archs "$app/Contents/MacOS/$exe")"
+          test "$version" = "$want" || { echo "The app version is not the version of tauri.conf.json."; exit 1; }
+          lipo "$app/Contents/MacOS/$exe" -verify_arch arm64 x86_64 || { echo "The app is not a universal build."; exit 1; }
+          /usr/bin/ditto -c -k --keepParent "$app" Zenith-macos-universal.app.zip
+          ls -l Zenith-macos-universal.app.zip && shasum -a 256 Zenith-macos-universal.app.zip
+          echo "exe=$app/Contents/MacOS/$exe" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zenith-macos-universal-app
+          path: Zenith-macos-universal.app.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      # The signed app gets the same test on the Mac that signs it, so a runner fault here does not fail the build.
+      - name: Usage-count test on the runner (app not signed)
+        continue-on-error: true
+        run: python3 .github/scripts/publik-telemetry-smoke.py "${{ steps.pack.outputs.exe }}" "${{ steps.pack.outputs.version }}" moodledesk --out=telemetry-macos-runner.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: telemetry-macos-runner
+          path: telemetry-macos-runner.json
+          if-no-files-found: warn
+
+  windows:
+    name: Windows x64 (setup.exe and msi, not signed)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+      - run: npm install
+      - name: Build the installers (not signed)
+        run: npm run tauri build
+      - name: The build must use the committed Cargo.lock
+        run: git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Collect the installers
+        shell: bash
+        run: |
+          mkdir out
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe src-tauri/target/release/bundle/msi/*.msi out/
+          ls -l out && sha256sum out/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zenith-windows
+          path: out/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      # Installs the real installer silently, starts the installed app against a listener on this runner
+      # and fails when no correct app_opened arrives, or when a request arrives with DO_NOT_TRACK=1.
+      - name: Usage-count test of the installed app
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem out -Filter "*-setup.exe" | Select-Object -First 1).FullName
+          $proc = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
+          Write-Host "silent install exit code: $($proc.ExitCode)"
+          $roots = @("$env:LOCALAPPDATA\Zenith", "$env:LOCALAPPDATA\Programs\Zenith", "$env:ProgramFiles\Zenith") | Where-Object { Test-Path $_ }
+          $exe = $null
+          if ($roots) { $exe = Get-ChildItem -Path $roots -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1 }
+          if (-not $exe) { Write-Host "::error::The installed app was not found after the silent install."; exit 1 }
+          Write-Host "installed app: $($exe.FullName)"
+          $version = node -p "require('./src-tauri/tauri.conf.json').version"
+          python .github/scripts/publik-telemetry-smoke.py "$($exe.FullName)" "$version" moodledesk --out=telemetry-windows-runner.json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: telemetry-windows-runner
+          path: telemetry-windows-runner.json
+          if-no-files-found: warn
+
+  linux:
+    name: Linux x64 (AppImage, deb, rpm)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm install
+      - name: Build the packages
+        run: npm run tauri build
+      - name: The build must use the committed Cargo.lock
+        run: git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Collect the packages
+        run: |
+          mkdir out
+          cp src-tauri/target/release/bundle/appimage/*.AppImage src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/rpm/*.rpm out/
+          ls -l out && sha256sum out/* && file out/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zenith-linux
+          path: out/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      # Installs the .deb and starts the installed app on a virtual display. A runner fault here does not fail the build.
+      - name: Usage-count test of the installed app
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y xvfb dbus-x11 ./out/*.deb
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          exe="$(dpkg -L zenith | grep -E '^/usr/bin/' | head -1)"
+          echo "installed app: $exe"
+          xvfb-run -a dbus-run-session -- python3 .github/scripts/publik-telemetry-smoke.py "$exe" "$version" moodledesk --out=telemetry-linux-runner.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: telemetry-linux-runner
+          path: telemetry-linux-runner.json
+          if-no-files-found: warn
