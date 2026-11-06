@@ -10,6 +10,10 @@ use tauri_plugin_android_native::AndroidNativeExt;
 #[cfg(target_os = "ios")]
 use tauri_plugin_ios_native::IosNativeExt;
 
+// publik build: anonymous usage counts (app opened, active session), desktop only. See PUBLIK-BUILD.md.
+#[cfg(desktop)]
+mod publik_telemetry;
+
 const SERVICE: &str = "moodle_mobile_app";
 const SCHEME: &str = "zenith";
 
@@ -1228,6 +1232,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
+            // publik build: sends "app_opened" on a background thread; it does not wait and it cannot fail the start.
+            #[cfg(desktop)]
+            publik_telemetry::start("moodledesk", &app.package_info().version.to_string(), None);
             #[cfg(any(windows, target_os = "linux"))]
             app.deep_link().register_all()?; // registers zenith:// at runtime (dev + portable builds)
             let handle = app.handle().clone();
