@@ -159,10 +159,12 @@ jobs:
           compression-level: 0
           retention-days: 14
       # Installs the .deb and starts the installed app on a virtual display. A runner fault here does not fail the build.
+      # desktop-file-utils: the app registers zenith:// at start-up with update-desktop-database. Without that tool the
+      # start-up stops with exit code 101 ("Failed to setup app ... No such file or directory"); a desktop system has it.
       - name: Usage-count test of the installed app
         continue-on-error: true
         run: |
-          sudo apt-get install -y xvfb dbus-x11 ./out/*.deb
+          sudo apt-get install -y xvfb dbus-x11 desktop-file-utils ./out/*.deb
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           exe="$(dpkg -L zenith | grep -E '^/usr/bin/' | head -1)"
           echo "installed app: $exe"
