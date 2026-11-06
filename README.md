@@ -181,6 +181,13 @@ Assignments and deadlines, dashboard with upcoming events, forums, grades, downl
 - **Unstyled UI**: make sure `src/main.tsx` imports `./style.css`.
 - **Site not recognised at login**: use the Moodle base address (for example `https://moodle.university.edu`) and check that the mobile service is enabled.
 
+## Usage counts (publik build)
+
+This fork is the publik build of Zenith (see [`PUBLIK-BUILD.md`](PUBLIK-BUILD.md)). The desktop app sends two anonymous usage events to publik: `app_opened` at each start and `active_session` every 30 minutes while it runs.
+Each event holds the app name (`moodledesk`), the app version, the operating system, the CPU type and a random install ID. It holds no Moodle site, no login, no course data and no file name.
+To turn it off, set `DO_NOT_TRACK=1` in the environment (or `PUBLIK_TELEMETRY=0`).
+Details: https://publikhq.com/skills/telemetry.md and [`PRIVACY.md`](PRIVACY.md).
+
 ## License
 
 GNU General Public License v3.0. See [LICENSE](LICENSE).
