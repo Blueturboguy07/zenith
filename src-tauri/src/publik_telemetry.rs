@@ -5,6 +5,8 @@
 //!   1. Copy this file into `src/` and add `mod publik_telemetry;` to `main.rs`.
 //!   2. Add `ureq = "2"` to Cargo.toml. If the app has reqwest, swap `http_post` below instead.
 //!   3. Call `publik_telemetry::start("your-slug", env!("CARGO_PKG_VERSION"), None);` at start-up.
+//!      A command-line tool calls `publik_telemetry::start_cli("your-slug", env!("CARGO_PKG_VERSION"));`
+//!      as the first line of `main()` instead.
 //!
 //! Opt-outs: DO_NOT_TRACK=1, PUBLIK_TELEMETRY=0, or "usage": false in <publik dir>/consent.json.
 //! Docs: https://publikhq.com/skills/telemetry.md
@@ -69,6 +71,73 @@ pub fn start(app_slug: &str, app_version: &str, key_provider: Option<KeyProvider
             send("active_session", &slug, &version, key_provider.as_ref(), &mut install_id);
         }
     });
+}
+
+/// For a command-line tool: call it as the first line of `main()`, in place of `start`.
+/// A tool can end before a send ends, so a detached copy of the tool sends `app_opened` and this
+/// tool goes on at once. No wait, and no hold on the tool's pipes.
+/// `--version`, `--help`, `help` and a run with no arguments send nothing. A tool sends `app_opened`
+/// at most once in 10 minutes, so a script that runs it 1,000 times does not start 1,000 sends.
+/// A tool that runs longer sends `active_session` every 30 minutes, as `start` does.
+pub fn start_cli(app_slug: &str, app_version: &str) {
+    const SENDER: &str = "PUBLIK_TELEMETRY_SENDER"; // set only on the detached copy
+    let slug = app_slug.trim().to_lowercase();
+    let version = clean_version(app_version);
+    if env(SENDER) == "1" {
+        send("app_opened", &slug, &version, None, &mut None);
+        std::process::exit(0);
+    }
+    let info_only = |word: &std::ffi::OsStr| matches!(word.to_str(), Some("--version" | "-V" | "version" | "--help" | "-h" | "help"));
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.is_empty() || info_only(&args[0]) || args.iter().any(|a| matches!(a.to_str(), Some("--help" | "-h"))) || STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let dir = publik_dir();
+    if opted_out(dir.as_deref()) {
+        return;
+    }
+    let seconds = env("PUBLIK_TELEMETRY_INTERVAL_SECONDS").parse::<f64>().ok(); // tests only
+    let interval = Duration::from_secs_f64(seconds.filter(|s| (1.0..=86400.0).contains(s)).unwrap_or(1800.0));
+    if dir.as_deref().map_or(true, |d| due(d, &slug, interval.min(Duration::from_secs(600)))) {
+        if let Ok(exe) = std::env::current_exe() {
+            let mut copy = std::process::Command::new(exe);
+            copy.env(SENDER, "1").current_dir(std::env::temp_dir()).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null());
+            if env("PUBLIK_TELEMETRY_DEBUG") != "1" {
+                copy.stderr(std::process::Stdio::null());
+            }
+            #[cfg(unix)]
+            {
+                std::os::unix::process::CommandExt::process_group(&mut copy, 0); // Ctrl-C on the tool does not stop the send
+            }
+            if let Ok(mut child) = copy.spawn() {
+                let _ = std::thread::Builder::new().name("publik-telemetry-wait".into()).spawn(move || child.wait());
+            }
+        }
+    }
+    let _ = std::thread::Builder::new().name("publik-telemetry".into()).spawn(move || {
+        let mut install_id = None;
+        loop {
+            std::thread::sleep(interval);
+            send("active_session", &slug, &version, None, &mut install_id);
+        }
+    });
+}
+
+/// True at most once in `gap` for this tool on this computer account. A small file's save time holds the last send.
+fn due(dir: &Path, slug: &str, gap: Duration) -> bool {
+    let stamp = dir.join(format!("cli-{}.stamp", slug));
+    let recent = std::fs::metadata(&stamp).and_then(|m| m.modified()).ok().and_then(|at| at.elapsed().ok()).map_or(false, |age| age < gap);
+    if recent {
+        return false;
+    }
+    let mut folder = std::fs::DirBuilder::new();
+    folder.recursive(true);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    }
+    let _ = folder.create(dir).and_then(|()| std::fs::write(&stamp, utc_now()));
+    true
 }
 
 /// The server takes 1 to 64 printable ASCII characters, with no "v" at the start and no space at an end.
