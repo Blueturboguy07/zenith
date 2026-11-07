@@ -203,6 +203,7 @@ Reading and writing forum replies, grades, a calendar of upcoming events.
 This fork is the publik build of Zenith (see [`PUBLIK-BUILD.md`](PUBLIK-BUILD.md)). The desktop app sends two anonymous usage events to publik: `app_opened` at each start and `active_session` every 30 minutes while it runs.
 Each event holds the app name (`moodledesk`), the app version, the operating system, the CPU type and a random install ID. It holds no Moodle site, no login, no course data and no file name.
 To turn it off, set `DO_NOT_TRACK=1` in the environment (or `PUBLIK_TELEMETRY=0`).
+The publik desktop build does not update itself: new versions come from https://publikhq.com/moodledesk (see [`PUBLIK-BUILD.md`](PUBLIK-BUILD.md)).
 Details: https://publikhq.com/skills/telemetry.md and [`PRIVACY.md`](PRIVACY.md).
 
 ## License

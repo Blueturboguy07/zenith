@@ -5,6 +5,7 @@
 #   Linux   .AppImage, .deb, .rpm.
 # The build commands are the ones of release.yml (npm install, tauri build), without tauri-action.
 # This workflow NEVER creates, changes or publishes a release. See PUBLIK-BUILD.md.
+# The app has no update address (tauri.conf.json): each job checks that first.
 name: publik-build
 
 on:
@@ -28,6 +29,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      # The publik build must never update itself to a build that is not publik's (see "The updater" in PUBLIK-BUILD.md).
+      - name: The updater must have no update address
+        shell: bash
+        run: |
+          node -e "const c=require('./src-tauri/tauri.conf.json'); const u=(c.plugins||{}).updater||{};
+            if (c.bundle.createUpdaterArtifacts !== false || (u.endpoints||[]).length) { console.error('tauri.conf.json sets an update address or updater artifacts. See PUBLIK-BUILD.md.'); process.exit(1); }
+            console.log('updater: no update address, no updater artifacts');"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -81,6 +89,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      # The publik build must never update itself to a build that is not publik's (see "The updater" in PUBLIK-BUILD.md).
+      - name: The updater must have no update address
+        shell: bash
+        run: |
+          node -e "const c=require('./src-tauri/tauri.conf.json'); const u=(c.plugins||{}).updater||{};
+            if (c.bundle.createUpdaterArtifacts !== false || (u.endpoints||[]).length) { console.error('tauri.conf.json sets an update address or updater artifacts. See PUBLIK-BUILD.md.'); process.exit(1); }
+            console.log('updater: no update address, no updater artifacts');"
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with: { workspaces: "src-tauri -> target" }
@@ -133,6 +148,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      # The publik build must never update itself to a build that is not publik's (see "The updater" in PUBLIK-BUILD.md).
+      - name: The updater must have no update address
+        shell: bash
+        run: |
+          node -e "const c=require('./src-tauri/tauri.conf.json'); const u=(c.plugins||{}).updater||{};
+            if (c.bundle.createUpdaterArtifacts !== false || (u.endpoints||[]).length) { console.error('tauri.conf.json sets an update address or updater artifacts. See PUBLIK-BUILD.md.'); process.exit(1); }
+            console.log('updater: no update address, no updater artifacts');"
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with: { workspaces: "src-tauri -> target" }

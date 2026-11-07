@@ -587,10 +587,16 @@ function Settings({ user, site, signOut, dir, pick, reset, mode, setMode, notify
       </section>
       <section className="sec">
         <div className="sechead static">Updates</div>
+        {/* publik build: the desktop app does not update itself (tauri.conf.json has no update address). See PUBLIK-BUILD.md. */}
+        {api.isMobile() ? (<>
         <div className="setrow col"><b>When an update is available</b>
           <div className="choices">{UPDATE_MODES.map(([k, t, d]) => <button key={k} className={updateMode === k ? "choice on" : "choice"} onClick={() => setUpdateMode(k)}><b>{t}</b><small>{d}</small></button>)}</div></div>
         <div className="setrow"><div className="grow"><b>Check for updates now</b><small>{canUpdate ? "Downloads and installs from GitHub releases." : "In-app install isn't available for this package; updates open the release page."}</small></div>
           <button className="btn" disabled={checking} onClick={checkNow}>{checking ? "Checking…" : "Check now"}</button></div>
+        </>) : (
+        <div className="setrow"><div className="grow"><b>Updates come from publik</b><small>This build does not update itself. Get new versions at publikhq.com/moodledesk.</small></div>
+          <button className="btn" onClick={() => void api.openExternal("https://publikhq.com/moodledesk").catch(() => {})}>Open publik</button></div>
+        )}
       </section>
       </>)}
       {tab === "appearance" && (<>
