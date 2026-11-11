@@ -6,6 +6,10 @@
 # The build commands are the ones of release.yml (npm install, tauri build), without tauri-action.
 # This workflow NEVER creates, changes or publishes a release. See PUBLIK-BUILD.md.
 # The app has no update address (tauri.conf.json): each job checks that first.
+# Sign in with publik: each job writes the publik app token from the repository secret PUBLIK_APP_TOKEN into
+# src-tauri/publik-app-token.txt (in .gitignore; build.rs compiles it in; never printed). Each job then runs the
+# built app with PUBLIK_SELF_TEST=1 against a fake publik on the runner (PUBLIK_ORIGIN, never publikhq.com): it must
+# print "publik self-test: ok moodledesk <version>", with the app token that the build baked in.
 name: publik-build
 
 on:
@@ -41,6 +45,18 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: swatinem/rust-cache@v2
         with: { workspaces: "src-tauri -> target" }
+      # The publik app token (see the top of this file). It is never printed and never committed.
+      - name: Write the publik app token (not printed)
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          case "$PUBLIK_APP_TOKEN" in pat_*) ;; *) echo "::error::The repository secret PUBLIK_APP_TOKEN is missing or is not a publik app token."; exit 1 ;; esac
+          test -z "$(git ls-files src-tauri/publik-app-token.txt)" || { echo "::error::src-tauri/publik-app-token.txt is in git."; exit 1; }
+          umask 077
+          printf '%s' "$PUBLIK_APP_TOKEN" > src-tauri/publik-app-token.txt
+          git check-ignore -q src-tauri/publik-app-token.txt || { echo "::error::src-tauri/publik-app-token.txt is not in .gitignore."; exit 1; }
+          echo "app token file written (in .gitignore)"
       - run: npm install
       # "--bundles app": the dmg is made later, from the notarized and stapled app.
       - name: Build the app (not signed)
@@ -70,15 +86,22 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      # The signed app gets the same test on the Mac that signs it, so a runner fault here does not fail the build.
-      - name: Usage-count test on the runner (app not signed)
+      # The sign-in gate is on the start-up path of this build, with the baked app token. No window opens.
+      - name: publik self-test on the runner (app not signed)
+        run: python3 .github/scripts/publik-telemetry-smoke.py "${{ steps.pack.outputs.exe }}" "${{ steps.pack.outputs.version }}" moodledesk --self-test --out=publik-self-test-macos-runner.json
+      # The app starts against the fake publik: the gate passes, then app_opened arrives with the install key; with
+      # DO_NOT_TRACK=1 no usage count arrives. The signed app gets the self-test on the Mac that signs it, so a runner
+      # fault here does not fail the build.
+      - name: Sign-in and usage-count test on the runner (app not signed)
         continue-on-error: true
         run: python3 .github/scripts/publik-telemetry-smoke.py "${{ steps.pack.outputs.exe }}" "${{ steps.pack.outputs.version }}" moodledesk --out=telemetry-macos-runner.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: telemetry-macos-runner
-          path: telemetry-macos-runner.json
+          path: |
+            publik-self-test-macos-runner.json
+            telemetry-macos-runner.json
           if-no-files-found: warn
 
   windows:
@@ -99,6 +122,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with: { workspaces: "src-tauri -> target" }
+      # The publik app token (see the top of this file). It is never printed and never committed.
+      - name: Write the publik app token (not printed)
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          case "$PUBLIK_APP_TOKEN" in pat_*) ;; *) echo "::error::The repository secret PUBLIK_APP_TOKEN is missing or is not a publik app token."; exit 1 ;; esac
+          test -z "$(git ls-files src-tauri/publik-app-token.txt)" || { echo "::error::src-tauri/publik-app-token.txt is in git."; exit 1; }
+          umask 077
+          printf '%s' "$PUBLIK_APP_TOKEN" > src-tauri/publik-app-token.txt
+          git check-ignore -q src-tauri/publik-app-token.txt || { echo "::error::src-tauri/publik-app-token.txt is not in .gitignore."; exit 1; }
+          echo "app token file written (in .gitignore)"
       - run: npm install
       - name: Build the installers (not signed)
         run: npm run tauri build
@@ -117,9 +152,11 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      # Installs the real installer silently, starts the installed app against a listener on this runner
-      # and fails when no correct app_opened arrives, or when a request arrives with DO_NOT_TRACK=1.
-      - name: Usage-count test of the installed app
+      # Installs the real installer silently. Then the installed app: (1) PUBLIK_SELF_TEST=1 against a fake publik on
+      # this runner must print "publik self-test: ok moodledesk <version>" with the baked app token; (2) it starts
+      # against the fake publik, and the test fails when the gate does not pass, when no correct app_opened arrives
+      # with the install key, or when a usage count arrives with DO_NOT_TRACK=1.
+      - name: Self-test, sign-in and usage-count test of the installed app
         shell: pwsh
         run: |
           $installer = (Get-ChildItem out -Filter "*-setup.exe" | Select-Object -First 1).FullName
@@ -131,13 +168,17 @@ jobs:
           if (-not $exe) { Write-Host "::error::The installed app was not found after the silent install."; exit 1 }
           Write-Host "installed app: $($exe.FullName)"
           $version = node -p "require('./src-tauri/tauri.conf.json').version"
+          python .github/scripts/publik-telemetry-smoke.py "$($exe.FullName)" "$version" moodledesk --self-test --out=publik-self-test-windows-runner.json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           python .github/scripts/publik-telemetry-smoke.py "$($exe.FullName)" "$version" moodledesk --out=telemetry-windows-runner.json
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: telemetry-windows-runner
-          path: telemetry-windows-runner.json
+          path: |
+            publik-self-test-windows-runner.json
+            telemetry-windows-runner.json
           if-no-files-found: warn
 
   linux:
@@ -163,6 +204,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev patchelf
+      # The publik app token (see the top of this file). It is never printed and never committed.
+      - name: Write the publik app token (not printed)
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          case "$PUBLIK_APP_TOKEN" in pat_*) ;; *) echo "::error::The repository secret PUBLIK_APP_TOKEN is missing or is not a publik app token."; exit 1 ;; esac
+          test -z "$(git ls-files src-tauri/publik-app-token.txt)" || { echo "::error::src-tauri/publik-app-token.txt is in git."; exit 1; }
+          umask 077
+          printf '%s' "$PUBLIK_APP_TOKEN" > src-tauri/publik-app-token.txt
+          git check-ignore -q src-tauri/publik-app-token.txt || { echo "::error::src-tauri/publik-app-token.txt is not in .gitignore."; exit 1; }
+          echo "app token file written (in .gitignore)"
       - run: npm install
       - name: Build the packages
         run: npm run tauri build
@@ -180,20 +233,29 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      # Installs the .deb and starts the installed app on a virtual display. A runner fault here does not fail the build.
-      # desktop-file-utils: the app registers zenith:// at start-up with update-desktop-database. Without that tool the
-      # start-up stops with exit code 101 ("Failed to setup app ... No such file or directory"); a desktop system has it.
-      - name: Usage-count test of the installed app
-        continue-on-error: true
+      # Installs the .deb. The installed app with PUBLIK_SELF_TEST=1 against a fake publik on this runner must print
+      # "publik self-test: ok moodledesk <version>" with the baked app token (it exits before any window opens).
+      - name: publik self-test of the installed app
         run: |
           sudo apt-get install -y xvfb dbus-x11 desktop-file-utils ./out/*.deb
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           exe="$(dpkg -L zenith | grep -E '^/usr/bin/' | head -1)"
           echo "installed app: $exe"
+          python3 .github/scripts/publik-telemetry-smoke.py "$exe" "$version" moodledesk --self-test --out=publik-self-test-linux-runner.json
+      # Starts the installed app on a virtual display against the fake publik. A runner fault here does not fail the build.
+      # desktop-file-utils: the app registers zenith:// at start-up with update-desktop-database. Without that tool the
+      # start-up stops with exit code 101 ("Failed to setup app ... No such file or directory"); a desktop system has it.
+      - name: Sign-in and usage-count test of the installed app
+        continue-on-error: true
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          exe="$(dpkg -L zenith | grep -E '^/usr/bin/' | head -1)"
           xvfb-run -a dbus-run-session -- python3 .github/scripts/publik-telemetry-smoke.py "$exe" "$version" moodledesk --out=telemetry-linux-runner.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: telemetry-linux-runner
-          path: telemetry-linux-runner.json
+          path: |
+            publik-self-test-linux-runner.json
+            telemetry-linux-runner.json
           if-no-files-found: warn

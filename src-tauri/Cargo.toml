@@ -33,8 +33,6 @@ strip = true
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-# publik build: the HTTP client of src/publik_telemetry.rs (anonymous usage counts, see PUBLIK-BUILD.md)
-ureq = "2"
 
 # Android has no keyring backend (the session goes to the app's private storage instead), see `secret` in lib.rs.
 [target.'cfg(not(target_os = "android"))'.dependencies]
