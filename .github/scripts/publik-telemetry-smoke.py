@@ -237,6 +237,7 @@ def main():
         print(__doc__)
         return 2
     exe, version, slug = args
+    exe = os.path.abspath(exe)  # the app runs in a temporary folder, so a relative path would not resolve
     result = {"app": slug, "version": version, "executable": exe, "system": platform.system(), "machine": platform.machine()}
 
     if "--self-test" in sys.argv[1:]:
