@@ -45,3 +45,6 @@ Thumbs.db
 *.keystore
 
 .opencode
+
+# publik build: the publik app token. publik-build.yml writes it from the repository secret; never commit it.
+src-tauri/publik-app-token.txt

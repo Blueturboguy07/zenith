@@ -10,9 +10,12 @@ use tauri_plugin_android_native::AndroidNativeExt;
 #[cfg(target_os = "ios")]
 use tauri_plugin_ios_native::IosNativeExt;
 
-// publik build: anonymous usage counts (app opened, active session), desktop only. See PUBLIK-BUILD.md.
+// publik build: Sign in with publik before the main window, and usage counts (app opened, active session), desktop
+// only. publik.rs is the publik module; publik_gate.rs is its window. See PUBLIK-BUILD.md.
 #[cfg(desktop)]
-mod publik_telemetry;
+mod publik;
+#[cfg(desktop)]
+mod publik_gate;
 
 const SERVICE: &str = "moodle_mobile_app";
 const SCHEME: &str = "zenith";
@@ -1212,12 +1215,21 @@ fn logout(app: AppHandle, state: State<AppState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // publik build: with PUBLIK_SELF_TEST=1 this prints "publik self-test: ok moodledesk <version>" and exits, before
+    // Tauri starts and before any window opens.
+    #[cfg(desktop)]
+    publik_gate::self_test_if_asked();
     let mut app = tauri::Builder::default();
     #[cfg(desktop)]
     {
-        app = app.plugin(tauri_plugin_single_instance::init(|_, _, _| {})); // must be first
+        // publik build: a second start brings the sign-in window to the front while it is open.
+        app = app.plugin(tauri_plugin_single_instance::init(|app, _, _| publik_gate::focus(app))); // must be first
         app = app.plugin(tauri_plugin_updater::Builder::new().build());
         app = app.plugin(tauri_plugin_process::init());
+        // publik build: the page of the sign-in window (no IPC).
+        app = app.register_asynchronous_uri_scheme_protocol(publik_gate::SCHEME, |_ctx, request, responder| {
+            publik_gate::serve(request, responder)
+        });
     }
     #[cfg(target_os = "android")]
     {
@@ -1227,14 +1239,19 @@ pub fn run() {
     {
         app = app.plugin(tauri_plugin_ios_native::init());
     }
+    let context = tauri::generate_context!();
+    // publik build: on a desktop the main window is made after the sign-in, not at start-up.
+    #[cfg(desktop)]
+    let context = publik_gate::main_window_after_sign_in(context);
     app.plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
-            // publik build: sends "app_opened" on a background thread; it does not wait and it cannot fail the start.
+            // publik build: Sign in with publik. The main window (and Zenith's first screen in it) opens only after the
+            // sign-in. Usage counts start after the sign-in too. See publik_gate.rs.
             #[cfg(desktop)]
-            publik_telemetry::start("moodledesk", &app.package_info().version.to_string(), None);
+            publik_gate::start(app.handle());
             #[cfg(any(windows, target_os = "linux"))]
             app.deep_link().register_all()?; // registers zenith:// at runtime (dev + portable builds)
             let handle = app.handle().clone();
@@ -1283,7 +1300,7 @@ pub fn run() {
             fetch_content,
             upload_draft_file
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running Zenith");
 }
 

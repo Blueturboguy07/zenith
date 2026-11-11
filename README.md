@@ -198,11 +198,12 @@ Reading and writing forum replies, grades, a calendar of upcoming events.
 - **Unstyled UI**: make sure `src/main.tsx` imports `./style.css`.
 - **Site not recognised at login**: use the Moodle base address (for example `https://moodle.university.edu`) and check that the mobile service is enabled.
 
-## Usage counts (publik build)
+## Sign in with publik and usage counts (publik build)
 
-This fork is the publik build of Zenith (see [`PUBLIK-BUILD.md`](PUBLIK-BUILD.md)). The desktop app sends two anonymous usage events to publik: `app_opened` at each start and `active_session` every 30 minutes while it runs.
-Each event holds the app name (`moodledesk`), the app version, the operating system, the CPU type and a random install ID. It holds no Moodle site, no login, no course data and no file name.
-To turn it off, set `DO_NOT_TRACK=1` in the environment (or `PUBLIK_TELEMETRY=0`).
+This fork is the publik build of Zenith (see [`PUBLIK-BUILD.md`](PUBLIK-BUILD.md)). The desktop app opens with "Sign in with publik", a small window before Zenith's own window. Click **Sign in with publik** and sign in in your browser. The window then continues by itself, and Zenith's window opens. A computer that is signed in already goes to Zenith's window directly.
+After the sign-in, the desktop app sends two usage events to publik: `app_opened` at each start and `active_session` every 30 minutes while it runs.
+Each event holds the app name (`moodledesk`), the app version, the operating system, the CPU type and a random install ID, and goes with the publik key of this computer. It holds no Moodle site, no login, no course data and no file name.
+To turn off the usage counts, set `DO_NOT_TRACK=1` in the environment (or `PUBLIK_TELEMETRY=0`). The sign-in stays on.
 The publik desktop build does not update itself: new versions come from https://publikhq.com/moodledesk (see [`PUBLIK-BUILD.md`](PUBLIK-BUILD.md)).
 Details: https://publikhq.com/skills/telemetry.md and [`PRIVACY.md`](PRIVACY.md).
 
